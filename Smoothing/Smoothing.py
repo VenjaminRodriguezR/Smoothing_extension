@@ -12,7 +12,6 @@ from slicer.parameterNodeWrapper import parameterNodeWrapper
 
 from slicer import vtkMRMLScalarVolumeNode, vtkMRMLSegmentationNode
 
-
 #
 # Smoothing
 #
@@ -31,8 +30,8 @@ class Smoothing(ScriptedLoadableModule):
 
         self.parent.helpText = _("""
 Smoothing Batch provides GUI-based postprocessing tools for smoothing 3D Slicer segmentations.
-This version allows the user to select one or more smoothing methods from the GUI and apply them sequentially.
-""")
+This version allows the user to select one or more smoothing methods from the GUI.
+Each selected method is applied independently to a copy of the original segmentation.""")
 
         self.parent.acknowledgementText = _("""
 This module was developed as a 3D Slicer scripted extension for segmentation postprocessing.
@@ -42,7 +41,6 @@ This module was developed as a 3D Slicer scripted extension for segmentation pos
 #
 # SmoothingParameterNode
 #
-
 
 @parameterNodeWrapper
 class SmoothingParameterNode:
@@ -67,8 +65,6 @@ class SmoothingParameterNode:
     jointTaubinSmoothingFactor: float = 0.5
 
     overwriteInput: bool = False
-
-
 #
 # SmoothingWidget
 #
@@ -228,6 +224,7 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """Update tab availability and Apply button state when smoothing methods change."""
 
         self.updateTabsFromCheckboxes()
+        self.updateOutputVisibility()
         self._checkCanApply()
 
     def updateTabsFromCheckboxes(self) -> None:
@@ -256,16 +253,21 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             tabWidget.setCurrentIndex(firstEnabledIndex)
 
     def updateOutputVisibility(self, *args) -> None:
-        """Hide output selector when smoothing overwrites the input segmentation."""
+        """Hide output selector only when overwrite is enabled and only one method is selected."""
 
         overwrite = self.ui.overwriteInputCheckBox.checked
+        numberOfMethods = len(self.getSelectedSmoothingSteps())
+
+        showOutputSelector = not overwrite or numberOfMethods > 1
 
         if hasattr(self.ui, "outputSegmentationLabel"):
-            self.ui.outputSegmentationLabel.visible = not overwrite
+            self.ui.outputSegmentationLabel.visible = showOutputSelector
 
-        self.ui.outputSegmentationSelector.visible = not overwrite
+        self.ui.outputSegmentationSelector.visible = showOutputSelector
 
     def anySmoothingMethodSelected(self) -> bool:
+        """Return True if at least one smoothing method is selected."""
+
         return (
             self.ui.medianCheckBox.checked
             or self.ui.openingCheckBox.checked
@@ -276,9 +278,9 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def getSelectedSmoothingSteps(self):
         """
-        Build the smoothing pipeline from checked methods.
+        Build the smoothing pipeline from selected checkboxes.
 
-        The current GUI applies methods in a fixed order:
+        The current fixed order is:
         Median -> Opening -> Closing -> Gaussian -> Joint Taubin.
         """
 
@@ -330,15 +332,34 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             )
 
         return steps
+    def anySmoothingMethodSelected(self) -> bool:
+        """Return True if at least one smoothing method is selected."""
 
+        return (
+            self.ui.medianCheckBox.checked
+            or self.ui.openingCheckBox.checked
+            or self.ui.closingCheckBox.checked
+            or self.ui.gaussianCheckBox.checked
+            or self.ui.jointTaubinCheckBox.checked
+        )
     def _checkCanApply(self, caller=None, event=None) -> None:
         inputSegmentation = self.ui.inputSegmentationSelector.currentNode()
         referenceVolume = self.ui.referenceVolumeSelector.currentNode()
         overwriteInput = self.ui.overwriteInputCheckBox.checked
         outputSegmentation = self.ui.outputSegmentationSelector.currentNode()
-        hasMethod = self.anySmoothingMethodSelected()
+        smoothingSteps = self.getSelectedSmoothingSteps()
 
-        canApply = inputSegmentation is not None and referenceVolume is not None and hasMethod
+        hasMethod = len(smoothingSteps) > 0
+        multipleMethods = len(smoothingSteps) > 1
+
+        canApply = (
+            inputSegmentation is not None
+            and referenceVolume is not None
+            and hasMethod
+        )
+
+        if overwriteInput and multipleMethods:
+            canApply = False
 
         if not overwriteInput:
             canApply = canApply and outputSegmentation is not None
@@ -346,18 +367,35 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.applyButton.enabled = canApply
 
         if canApply:
-            self.ui.applyButton.toolTip = _("Apply selected smoothing methods.")
+            self.ui.applyButton.toolTip = _(
+                "Apply each selected smoothing method independently to the original segmentation."
+            )
             if hasattr(self.ui, "statusLabel"):
                 self.ui.statusLabel.text = "Ready to apply smoothing."
         else:
-            self.ui.applyButton.toolTip = _(
-                "Select input segmentation, reference volume, output segmentation, and at least one smoothing method."
-            )
-            if hasattr(self.ui, "statusLabel"):
-                self.ui.statusLabel.text = "Select the required inputs and smoothing methods."
-
+            if overwriteInput and multipleMethods:
+                self.ui.applyButton.toolTip = _(
+                    "Overwrite input is only allowed when one smoothing method is selected."
+                )
+                if hasattr(self.ui, "statusLabel"):
+                    self.ui.statusLabel.text = (
+                        "Disable overwrite or select only one smoothing method."
+                    )
+            else:
+                self.ui.applyButton.toolTip = _(
+                    "Select input segmentation, reference volume, output segmentation, and at least one smoothing method."
+                )
+                if hasattr(self.ui, "statusLabel"):
+                    self.ui.statusLabel.text = (
+                        "Select the required inputs and smoothing methods."
+                    )
     def onApplyButton(self) -> None:
-        """Run smoothing when the user clicks Apply."""
+        """Run smoothing when the user clicks Apply.
+
+        Important:
+        Each selected smoothing method is applied independently to the original
+        input segmentation. Methods are not applied sequentially on top of each other.
+        """
 
         with slicer.util.tryWithErrorDisplay(
             _("Failed to apply smoothing."), waitCursor=True
@@ -374,27 +412,56 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
             overwriteInput = self.ui.overwriteInputCheckBox.checked
 
-            if overwriteInput:
-                outputSegmentation = inputSegmentation
-            else:
-                outputSegmentation = self.ui.outputSegmentationSelector.currentNode()
-                self.logic.cloneSegmentation(inputSegmentation, outputSegmentation)
+            # Overwrite only makes sense when there is a single selected method.
+            # If several methods are selected, each method needs a different output node.
+            if overwriteInput and len(smoothingSteps) > 1:
+                raise ValueError(
+                    "Overwrite input can only be used when one smoothing method is selected. "
+                    "Disable overwrite to generate one independent output segmentation per method."
+                )
 
             if hasattr(self.ui, "statusLabel"):
-                self.ui.statusLabel.text = "Applying smoothing..."
+                self.ui.statusLabel.text = "Applying smoothing methods independently..."
             slicer.app.processEvents()
 
-            self.logic.smoothSegmentationPipeline(
-                segmentationNode=outputSegmentation,
-                referenceVolumeNode=referenceVolume,
-                steps=smoothingSteps,
-                scope=scope,
-            )
+            if overwriteInput:
+                # Single selected method only.
+                step = smoothingSteps[0]
+                self.logic.smoothSegmentation(
+                    segmentationNode=inputSegmentation,
+                    referenceVolumeNode=referenceVolume,
+                    method=step["method"],
+                    scope=scope,
+                    kernelSizeMm=step.get("kernelSizeMm", 3.0),
+                    gaussianStandardDeviationMm=step.get(
+                        "gaussianStandardDeviationMm", 1.0
+                    ),
+                    jointTaubinSmoothingFactor=step.get(
+                        "jointTaubinSmoothingFactor", 0.5
+                    ),
+                )
+
+                outputNodes = [inputSegmentation]
+
+            else:
+                # Independent mode:
+                # each method is applied to a fresh clone of the ORIGINAL segmentation.
+                outputNodes = self.logic.smoothSegmentationIndependently(
+                    inputSegmentationNode=inputSegmentation,
+                    referenceVolumeNode=referenceVolume,
+                    steps=smoothingSteps,
+                    scope=scope,
+                    baseOutputSegmentationNode=self.ui.outputSegmentationSelector.currentNode(),
+                )
 
             if hasattr(self.ui, "statusLabel"):
-                self.ui.statusLabel.text = "Smoothing completed."
+                self.ui.statusLabel.text = (
+                    f"Smoothing completed. Created {len(outputNodes)} output segmentation(s)."
+                )
 
-            slicer.util.infoDisplay("Smoothing completed.")
+            slicer.util.infoDisplay(
+                f"Smoothing completed. Created {len(outputNodes)} output segmentation(s)."
+            )
 
 
 #
@@ -481,6 +548,7 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
         startTime = time.time()
         logging.info(f"Segmentation smoothing started: {method}")
 
+        # Make sure binary labelmap representation exists.
         segmentationNode.GetSegmentation().CreateRepresentation(
             slicer.vtkSegmentationConverter.GetSegmentationBinaryLabelmapRepresentationName()
         )
@@ -549,6 +617,143 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
         stopTime = time.time()
         logging.info(
             f"Segmentation smoothing step completed in {stopTime - startTime:.2f} seconds"
+        )
+    def safeNodeName(self, name: str) -> str:
+        """Return a compact name fragment suitable for MRML node names."""
+
+        return (
+            name.strip()
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace("\\", "_")
+            .replace("(", "")
+            .replace(")", "")
+        )
+    def smoothSegmentationIndependently(
+        self,
+        inputSegmentationNode,
+        referenceVolumeNode,
+        steps,
+        scope="VISIBLE_SEGMENTS",
+        baseOutputSegmentationNode=None,
+    ):
+        """
+        Apply each smoothing method independently to the original segmentation.
+
+        For each selected method:
+        1. Create a fresh copy of the original segmentation.
+        2. Apply exactly one smoothing method to that copy.
+        3. Keep the result as an independent output segmentation.
+
+        This intentionally does NOT apply smoothing methods sequentially.
+        """
+
+        if inputSegmentationNode is None:
+            raise ValueError("Input segmentation node is invalid.")
+
+        if referenceVolumeNode is None:
+            raise ValueError("Reference volume node is invalid.")
+
+        if not steps:
+            raise ValueError("No smoothing steps were selected.")
+
+        startTime = time.time()
+        logging.info("Independent smoothing started")
+
+        outputNodes = []
+
+        for stepIndex, step in enumerate(steps, start=1):
+
+            methodName = step.get("name", step.get("method", f"Step{stepIndex}"))
+            safeMethodName = self.safeNodeName(methodName)
+
+            if len(steps) == 1 and baseOutputSegmentationNode is not None:
+                # If only one method is selected, use the user-selected output node.
+                outputNode = baseOutputSegmentationNode
+                outputNode.Copy(inputSegmentationNode)
+                outputNode.SetName(
+                    f"{inputSegmentationNode.GetName()}_{safeMethodName}_smoothed"
+                )
+                outputNode.CreateDefaultDisplayNodes()
+            else:
+                # If multiple methods are selected, create one output segmentation per method.
+                outputNode = slicer.mrmlScene.AddNewNodeByClass(
+                    "vtkMRMLSegmentationNode",
+                    f"{inputSegmentationNode.GetName()}_{safeMethodName}_smoothed",
+                )
+                outputNode.Copy(inputSegmentationNode)
+                outputNode.CreateDefaultDisplayNodes()
+
+            logging.info(
+                f"Applying independent smoothing {stepIndex}/{len(steps)}: {methodName}"
+            )
+
+            self.smoothSegmentation(
+                segmentationNode=outputNode,
+                referenceVolumeNode=referenceVolumeNode,
+                method=step["method"],
+                scope=scope,
+                kernelSizeMm=step.get("kernelSizeMm", 3.0),
+                gaussianStandardDeviationMm=step.get(
+                    "gaussianStandardDeviationMm", 1.0
+                ),
+                jointTaubinSmoothingFactor=step.get(
+                    "jointTaubinSmoothingFactor", 0.5
+                ),
+            )
+
+            outputNodes.append(outputNode)
+
+        stopTime = time.time()
+        logging.info(
+            f"Independent smoothing completed in {stopTime - startTime:.2f} seconds"
+        )
+
+        return outputNodes
+    def smoothSegmentationPipeline(
+        self,
+        segmentationNode,
+        referenceVolumeNode,
+        steps,
+        scope="VISIBLE_SEGMENTS",
+    ) -> None:
+        """Apply multiple smoothing steps sequentially."""
+
+        if segmentationNode is None:
+            raise ValueError("Segmentation node is invalid.")
+
+        if referenceVolumeNode is None:
+            raise ValueError("Reference volume node is invalid.")
+
+        if not steps:
+            raise ValueError("No smoothing steps were selected.")
+
+        startTime = time.time()
+        logging.info("Segmentation smoothing pipeline started")
+
+        for stepIndex, step in enumerate(steps, start=1):
+            logging.info(
+                f"Applying smoothing step {stepIndex}/{len(steps)}: "
+                f"{step.get('name', step.get('method'))}"
+            )
+
+            self.smoothSegmentation(
+                segmentationNode=segmentationNode,
+                referenceVolumeNode=referenceVolumeNode,
+                method=step["method"],
+                scope=scope,
+                kernelSizeMm=step.get("kernelSizeMm", 3.0),
+                gaussianStandardDeviationMm=step.get(
+                    "gaussianStandardDeviationMm", 1.0
+                ),
+                jointTaubinSmoothingFactor=step.get(
+                    "jointTaubinSmoothingFactor", 0.5
+                ),
+            )
+
+        stopTime = time.time()
+        logging.info(
+            f"Segmentation smoothing pipeline completed in {stopTime - startTime:.2f} seconds"
         )
 
     def visibleSegmentIds(self, segmentationNode):
