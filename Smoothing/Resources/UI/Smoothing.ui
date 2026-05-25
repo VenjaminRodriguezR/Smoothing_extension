@@ -7,22 +7,18 @@
     <x>0</x>
     <y>0</y>
     <width>430</width>
-    <height>520</height>
+    <height>650</height>
    </rect>
   </property>
-  <property name="windowTitle">
-   <string>Smoothing</string>
-  </property>
   <layout class="QVBoxLayout" name="verticalLayout">
+
    <item>
     <widget class="ctkCollapsibleButton" name="inputsCollapsibleButton">
      <property name="text">
       <string>Inputs</string>
      </property>
      <layout class="QFormLayout" name="inputsFormLayout">
-      <property name="fieldGrowthPolicy">
-       <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
-      </property>
+
       <item row="0" column="0">
        <widget class="QLabel" name="inputSegmentationLabel">
         <property name="text">
@@ -33,7 +29,7 @@
       <item row="0" column="1">
        <widget class="qMRMLNodeComboBox" name="inputSegmentationSelector">
         <property name="toolTip">
-         <string>Select the segmentation node that will be smoothed.</string>
+         <string>Select the segmentation to smooth.</string>
         </property>
         <property name="nodeTypes">
          <stringlist notr="true">
@@ -52,17 +48,12 @@
         <property name="removeEnabled">
          <bool>false</bool>
         </property>
-        <property name="renameEnabled">
-         <bool>false</bool>
-        </property>
-        <property name="selectNodeUponCreation">
-         <bool>false</bool>
-        </property>
         <property name="SlicerParameterName" stdset="0">
          <string>inputSegmentation</string>
         </property>
        </widget>
       </item>
+
       <item row="1" column="0">
        <widget class="QLabel" name="referenceVolumeLabel">
         <property name="text">
@@ -73,7 +64,7 @@
       <item row="1" column="1">
        <widget class="qMRMLNodeComboBox" name="referenceVolumeSelector">
         <property name="toolTip">
-         <string>Select the reference scalar volume associated with the segmentation geometry.</string>
+         <string>Select the reference volume associated with the segmentation.</string>
         </property>
         <property name="nodeTypes">
          <stringlist notr="true">
@@ -92,203 +83,368 @@
         <property name="removeEnabled">
          <bool>false</bool>
         </property>
-        <property name="renameEnabled">
-         <bool>false</bool>
-        </property>
-        <property name="selectNodeUponCreation">
-         <bool>false</bool>
-        </property>
         <property name="SlicerParameterName" stdset="0">
          <string>referenceVolume</string>
         </property>
        </widget>
       </item>
+
      </layout>
     </widget>
    </item>
+
    <item>
-    <widget class="ctkCollapsibleButton" name="smoothingCollapsibleButton">
+    <widget class="ctkCollapsibleButton" name="methodsCollapsibleButton">
+     <property name="text">
+      <string>Smoothing methods</string>
+     </property>
+     <layout class="QVBoxLayout" name="methodsVerticalLayout">
+
+      <item>
+       <widget class="QLabel" name="methodsDescriptionLabel">
+        <property name="text">
+         <string>Select one or more smoothing methods. Selected methods are applied sequentially in the order shown below.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+
+      <item>
+       <layout class="QGridLayout" name="methodsGridLayout">
+
+        <item row="0" column="0">
+         <widget class="QCheckBox" name="medianCheckBox">
+          <property name="text">
+           <string>Median</string>
+          </property>
+          <property name="toolTip">
+           <string>Removes small irregularities while preserving the general segmentation boundary.</string>
+          </property>
+          <property name="SlicerParameterName" stdset="0">
+           <string>medianEnabled</string>
+          </property>
+         </widget>
+        </item>
+
+        <item row="0" column="1">
+         <widget class="QCheckBox" name="openingCheckBox">
+          <property name="text">
+           <string>Opening</string>
+          </property>
+          <property name="toolTip">
+           <string>Removes small protrusions from the segmentation.</string>
+          </property>
+          <property name="SlicerParameterName" stdset="0">
+           <string>openingEnabled</string>
+          </property>
+         </widget>
+        </item>
+
+        <item row="1" column="0">
+         <widget class="QCheckBox" name="closingCheckBox">
+          <property name="text">
+           <string>Closing</string>
+          </property>
+          <property name="toolTip">
+           <string>Fills small holes and narrow gaps in the segmentation.</string>
+          </property>
+          <property name="SlicerParameterName" stdset="0">
+           <string>closingEnabled</string>
+          </property>
+         </widget>
+        </item>
+
+        <item row="1" column="1">
+         <widget class="QCheckBox" name="gaussianCheckBox">
+          <property name="text">
+           <string>Gaussian</string>
+          </property>
+          <property name="toolTip">
+           <string>Applies Gaussian smoothing to the segmentation boundary.</string>
+          </property>
+          <property name="SlicerParameterName" stdset="0">
+           <string>gaussianEnabled</string>
+          </property>
+         </widget>
+        </item>
+
+        <item row="2" column="0">
+         <widget class="QCheckBox" name="jointTaubinCheckBox">
+          <property name="text">
+           <string>Joint Taubin</string>
+          </property>
+          <property name="toolTip">
+           <string>Smooths visible segments jointly and helps preserve interfaces between segments.</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+          <property name="SlicerParameterName" stdset="0">
+           <string>jointTaubinEnabled</string>
+          </property>
+         </widget>
+        </item>
+
+       </layout>
+      </item>
+
+     </layout>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="ctkCollapsibleButton" name="parametersCollapsibleButton">
      <property name="text">
       <string>Smoothing parameters</string>
      </property>
-     <layout class="QFormLayout" name="smoothingFormLayout">
-      <property name="fieldGrowthPolicy">
-       <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
-      </property>
-      <item row="0" column="0">
-       <widget class="QLabel" name="methodLabel">
-        <property name="text">
-         <string>Method:</string>
+     <layout class="QVBoxLayout" name="parametersVerticalLayout">
+
+      <item>
+       <widget class="QTabWidget" name="parametersTabWidget">
+        <property name="currentIndex">
+         <number>4</number>
         </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="QComboBox" name="methodComboBox">
-        <property name="toolTip">
-         <string>Select the Segment Editor smoothing method.</string>
-        </property>
-        <item>
-         <property name="text">
+
+        <widget class="QWidget" name="medianTab">
+         <attribute name="title">
           <string>Median</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
+         </attribute>
+         <layout class="QFormLayout" name="medianFormLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="medianKernelSizeLabel">
+            <property name="text">
+             <string>Kernel size:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="ctkSliderWidget" name="medianKernelSizeSliderWidget">
+            <property name="toolTip">
+             <string>Median smoothing kernel size in millimeters.</string>
+            </property>
+            <property name="minimum">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>20.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.500000000000000</double>
+            </property>
+            <property name="value">
+             <double>3.000000000000000</double>
+            </property>
+            <property name="suffix">
+             <string> mm</string>
+            </property>
+            <property name="SlicerParameterName" stdset="0">
+             <string>medianKernelSizeMm</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+
+        <widget class="QWidget" name="openingTab">
+         <attribute name="title">
           <string>Opening</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
+         </attribute>
+         <layout class="QFormLayout" name="openingFormLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="openingKernelSizeLabel">
+            <property name="text">
+             <string>Kernel size:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="ctkSliderWidget" name="openingKernelSizeSliderWidget">
+            <property name="toolTip">
+             <string>Opening kernel size in millimeters.</string>
+            </property>
+            <property name="minimum">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>20.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.500000000000000</double>
+            </property>
+            <property name="value">
+             <double>3.000000000000000</double>
+            </property>
+            <property name="suffix">
+             <string> mm</string>
+            </property>
+            <property name="SlicerParameterName" stdset="0">
+             <string>openingKernelSizeMm</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+
+        <widget class="QWidget" name="closingTab">
+         <attribute name="title">
           <string>Closing</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
+         </attribute>
+         <layout class="QFormLayout" name="closingFormLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="closingKernelSizeLabel">
+            <property name="text">
+             <string>Kernel size:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="ctkSliderWidget" name="closingKernelSizeSliderWidget">
+            <property name="toolTip">
+             <string>Closing kernel size in millimeters.</string>
+            </property>
+            <property name="minimum">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>20.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.500000000000000</double>
+            </property>
+            <property name="value">
+             <double>3.000000000000000</double>
+            </property>
+            <property name="suffix">
+             <string> mm</string>
+            </property>
+            <property name="SlicerParameterName" stdset="0">
+             <string>closingKernelSizeMm</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+
+        <widget class="QWidget" name="gaussianTab">
+         <attribute name="title">
           <string>Gaussian</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
+         </attribute>
+         <layout class="QFormLayout" name="gaussianFormLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="gaussianStdLabel">
+            <property name="text">
+             <string>Standard deviation:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="ctkSliderWidget" name="gaussianStdSliderWidget">
+            <property name="toolTip">
+             <string>Gaussian smoothing standard deviation in millimeters.</string>
+            </property>
+            <property name="minimum">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>10.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.250000000000000</double>
+            </property>
+            <property name="value">
+             <double>1.000000000000000</double>
+            </property>
+            <property name="suffix">
+             <string> mm</string>
+            </property>
+            <property name="SlicerParameterName" stdset="0">
+             <string>gaussianStandardDeviationMm</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+
+        <widget class="QWidget" name="jointTaubinTab">
+         <attribute name="title">
           <string>Joint Taubin</string>
-         </property>
-        </item>
-        <property name="SlicerParameterName" stdset="0">
-         <string>smoothingMethod</string>
-        </property>
+         </attribute>
+         <layout class="QFormLayout" name="jointTaubinFormLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="jointTaubinLabel">
+            <property name="text">
+             <string>Smoothing factor:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="ctkSliderWidget" name="jointTaubinSliderWidget">
+            <property name="toolTip">
+             <string>Joint Taubin smoothing factor.</string>
+            </property>
+            <property name="minimum">
+             <double>0.010000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>1.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.050000000000000</double>
+            </property>
+            <property name="value">
+             <double>0.500000000000000</double>
+            </property>
+            <property name="SlicerParameterName" stdset="0">
+             <string>jointTaubinSmoothingFactor</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+
        </widget>
       </item>
-      <item row="1" column="0">
+
+     </layout>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="ctkCollapsibleButton" name="scopeCollapsibleButton">
+     <property name="text">
+      <string>Application scope</string>
+     </property>
+     <layout class="QFormLayout" name="scopeFormLayout">
+      <item row="0" column="0">
        <widget class="QLabel" name="scopeLabel">
         <property name="text">
          <string>Apply to:</string>
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
+      <item row="0" column="1">
        <widget class="QComboBox" name="scopeComboBox">
         <property name="toolTip">
-         <string>Select whether smoothing is applied to visible segments or to all segments.</string>
+         <string>Select whether smoothing is applied to visible segments or all segments.</string>
         </property>
-        <item>
-         <property name="text">
-          <string>Visible segments</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>All segments</string>
-         </property>
-        </item>
         <property name="SlicerParameterName" stdset="0">
          <string>applyScope</string>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="0">
-       <widget class="QLabel" name="kernelSizeLabel">
-        <property name="text">
-         <string>Kernel size:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="1">
-       <widget class="ctkSliderWidget" name="kernelSizeSliderWidget">
-        <property name="toolTip">
-         <string>Kernel diameter in millimeters for median, opening, and closing smoothing.</string>
-        </property>
-        <property name="singleStep">
-         <double>0.500000000000000</double>
-        </property>
-        <property name="minimum">
-         <double>0.100000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>20.000000000000000</double>
-        </property>
-        <property name="value">
-         <double>3.000000000000000</double>
-        </property>
-        <property name="suffix">
-         <string> mm</string>
-        </property>
-        <property name="SlicerParameterName" stdset="0">
-         <string>kernelSizeMm</string>
-        </property>
-       </widget>
-      </item>
-      <item row="3" column="0">
-       <widget class="QLabel" name="gaussianStdLabel">
-        <property name="text">
-         <string>Gaussian SD:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="3" column="1">
-       <widget class="ctkSliderWidget" name="gaussianStdSliderWidget">
-        <property name="toolTip">
-         <string>Gaussian standard deviation in millimeters.</string>
-        </property>
-        <property name="singleStep">
-         <double>0.250000000000000</double>
-        </property>
-        <property name="minimum">
-         <double>0.100000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>10.000000000000000</double>
-        </property>
-        <property name="value">
-         <double>1.000000000000000</double>
-        </property>
-        <property name="suffix">
-         <string> mm</string>
-        </property>
-        <property name="SlicerParameterName" stdset="0">
-         <string>gaussianStandardDeviationMm</string>
-        </property>
-       </widget>
-      </item>
-      <item row="4" column="0">
-       <widget class="QLabel" name="jointTaubinLabel">
-        <property name="text">
-         <string>Joint Taubin factor:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="4" column="1">
-       <widget class="ctkSliderWidget" name="jointTaubinSliderWidget">
-        <property name="toolTip">
-         <string>Smoothing factor used by joint Taubin smoothing. Higher values produce stronger smoothing.</string>
-        </property>
-        <property name="singleStep">
-         <double>0.050000000000000</double>
-        </property>
-        <property name="minimum">
-         <double>0.010000000000000</double>
-        </property>
-        <property name="maximum">
-         <double>1.000000000000000</double>
-        </property>
-        <property name="value">
-         <double>0.500000000000000</double>
-        </property>
-        <property name="SlicerParameterName" stdset="0">
-         <string>jointTaubinSmoothingFactor</string>
         </property>
        </widget>
       </item>
      </layout>
     </widget>
    </item>
+
    <item>
     <widget class="ctkCollapsibleButton" name="outputsCollapsibleButton">
      <property name="text">
       <string>Output</string>
      </property>
      <layout class="QFormLayout" name="outputsFormLayout">
-      <property name="fieldGrowthPolicy">
-       <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
-      </property>
+
       <item row="0" column="0">
        <widget class="QLabel" name="overwriteInputLabel">
         <property name="text">
@@ -299,7 +455,7 @@
       <item row="0" column="1">
        <widget class="QCheckBox" name="overwriteInputCheckBox">
         <property name="toolTip">
-         <string>If enabled, smoothing is applied directly to the input segmentation. If disabled, the input is copied to the selected output segmentation first.</string>
+         <string>If enabled, smoothing modifies the input segmentation directly.</string>
         </property>
         <property name="text">
          <string/>
@@ -312,6 +468,7 @@
         </property>
        </widget>
       </item>
+
       <item row="1" column="0">
        <widget class="QLabel" name="outputSegmentationLabel">
         <property name="text">
@@ -322,7 +479,7 @@
       <item row="1" column="1">
        <widget class="qMRMLNodeComboBox" name="outputSegmentationSelector">
         <property name="toolTip">
-         <string>Select or create the output segmentation node for the smoothed result.</string>
+         <string>Select or create the output segmentation node.</string>
         </property>
         <property name="nodeTypes">
          <stringlist notr="true">
@@ -352,32 +509,36 @@
         </property>
        </widget>
       </item>
+
      </layout>
     </widget>
    </item>
+
    <item>
     <widget class="QPushButton" name="applyButton">
      <property name="enabled">
       <bool>false</bool>
      </property>
      <property name="toolTip">
-      <string>Apply smoothing to the selected segmentation.</string>
+      <string>Apply selected smoothing methods.</string>
      </property>
      <property name="text">
       <string>Apply smoothing</string>
      </property>
     </widget>
    </item>
+
    <item>
     <widget class="QLabel" name="statusLabel">
      <property name="text">
-      <string>Select input data and smoothing parameters.</string>
+      <string>Ready.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
      </property>
     </widget>
    </item>
+
    <item>
     <spacer name="verticalSpacer">
      <property name="orientation">
@@ -391,8 +552,10 @@
      </property>
     </spacer>
    </item>
+
   </layout>
  </widget>
+
  <customwidgets>
   <customwidget>
    <class>qMRMLNodeComboBox</class>
@@ -417,7 +580,9 @@
    <header>ctkSliderWidget.h</header>
   </customwidget>
  </customwidgets>
+
  <resources/>
+
  <connections>
   <connection>
    <sender>Smoothing</sender>
@@ -426,15 +591,16 @@
    <slot>setMRMLScene(vtkMRMLScene*)</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>105</x>
-     <y>20</y>
+     <x>100</x>
+     <y>50</y>
     </hint>
     <hint type="destinationlabel">
-     <x>280</x>
-     <y>70</y>
+     <x>300</x>
+     <y>50</y>
     </hint>
    </hints>
   </connection>
+
   <connection>
    <sender>Smoothing</sender>
    <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
@@ -442,15 +608,16 @@
    <slot>setMRMLScene(vtkMRMLScene*)</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>105</x>
-     <y>20</y>
+     <x>100</x>
+     <y>80</y>
     </hint>
     <hint type="destinationlabel">
-     <x>280</x>
-     <y>105</y>
+     <x>300</x>
+     <y>80</y>
     </hint>
    </hints>
   </connection>
+
   <connection>
    <sender>Smoothing</sender>
    <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
@@ -458,12 +625,12 @@
    <slot>setMRMLScene(vtkMRMLScene*)</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>105</x>
-     <y>20</y>
+     <x>100</x>
+     <y>530</y>
     </hint>
     <hint type="destinationlabel">
-     <x>280</x>
-     <y>410</y>
+     <x>300</x>
+     <y>530</y>
     </hint>
    </hints>
   </connection>
