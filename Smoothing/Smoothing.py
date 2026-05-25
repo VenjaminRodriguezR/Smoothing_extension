@@ -1,6 +1,5 @@
 import logging
-import os
-from typing import Annotated
+import time
 
 import vtk
 
@@ -9,12 +8,9 @@ from slicer.i18n import tr as _
 from slicer.i18n import translate
 from slicer.ScriptedLoadableModule import *
 from slicer.util import VTKObservationMixin
-from slicer.parameterNodeWrapper import (
-    parameterNodeWrapper,
-    WithinRange,
-)
+from slicer.parameterNodeWrapper import parameterNodeWrapper
 
-from slicer import vtkMRMLScalarVolumeNode
+from slicer import vtkMRMLScalarVolumeNode, vtkMRMLSegmentationNode
 
 
 #
@@ -23,81 +19,25 @@ from slicer import vtkMRMLScalarVolumeNode
 
 
 class Smoothing(ScriptedLoadableModule):
-    """Uses ScriptedLoadableModule base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
-    """
+    """GUI-based segmentation smoothing module for 3D Slicer."""
 
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
-        self.parent.title = _("Smoothing")  # TODO: make this more human readable by adding spaces
-        # TODO: set categories (folders where the module shows up in the module selector)
-        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Examples")]
-        self.parent.dependencies = []  # TODO: add here list of module names that this module requires
-        self.parent.contributors = ["John Doe (AnyWare Corp.)"]  # TODO: replace with "Firstname Lastname (Organization)"
-        # TODO: update with short description of the module and a link to online module documentation
-        # _() function marks text as translatable to other languages
+
+        self.parent.title = _("Smoothing Batch")
+        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Segmentation")]
+        self.parent.dependencies = ["Segmentations", "SegmentEditor"]
+        self.parent.contributors = ["Ben"]
+
         self.parent.helpText = _("""
-This is an example of scripted loadable module bundled in an extension.
-See more information in <a href="https://github.com/organization/projectname#Smoothing">module documentation</a>.
+Smoothing Batch provides GUI-based postprocessing tools for smoothing 3D Slicer segmentations.
+The first version applies existing Segment Editor smoothing methods to loaded segmentations.
+Future versions will add batch folder processing, model smoothing, and quantitative quality-control metrics.
 """)
-        # TODO: replace with organization, grant and thanks
+
         self.parent.acknowledgementText = _("""
-This file was originally developed by Jean-Christophe Fillion-Robin, Kitware Inc., Andras Lasso, PerkLab,
-and Steve Pieper, Isomics, Inc. and was partially funded by NIH grant 3P41RR013218-12S1.
+This module was developed as a 3D Slicer scripted extension for segmentation postprocessing.
 """)
-
-        # Additional initialization step after application startup is complete
-        slicer.app.connect("startupCompleted()", registerSampleData)
-
-
-#
-# Register sample data sets in Sample Data module
-#
-
-
-def registerSampleData():
-    """Add data sets to Sample Data module."""
-    # It is always recommended to provide sample data for users to make it easy to try the module,
-    # but if no sample data is available then this method (and associated startupCompeted signal connection) can be removed.
-
-    import SampleData
-
-    iconsPath = os.path.join(os.path.dirname(__file__), "Resources/Icons")
-
-    # To ensure that the source code repository remains small (can be downloaded and installed quickly)
-    # it is recommended to store data sets that are larger than a few MB in a Github release.
-
-    # Smoothing1
-    SampleData.SampleDataLogic.registerCustomSampleDataSource(
-        # Category and sample name displayed in Sample Data module
-        category="Smoothing",
-        sampleName="Smoothing1",
-        # Thumbnail should have size of approximately 260x280 pixels and stored in Resources/Icons folder.
-        # It can be created by Screen Capture module, "Capture all views" option enabled, "Number of images" set to "Single".
-        thumbnailFileName=os.path.join(iconsPath, "Smoothing1.png"),
-        # Download URL and target file name
-        uris="https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/998cb522173839c78657f4bc0ea907cea09fd04e44601f17c82ea27927937b95",
-        fileNames="Smoothing1.nrrd",
-        # Checksum to ensure file integrity. Can be computed by this command:
-        #  import hashlib; print(hashlib.sha256(open(filename, "rb").read()).hexdigest())
-        checksums="SHA256:998cb522173839c78657f4bc0ea907cea09fd04e44601f17c82ea27927937b95",
-        # This node name will be used when the data set is loaded
-        nodeNames="Smoothing1",
-    )
-
-    # Smoothing2
-    SampleData.SampleDataLogic.registerCustomSampleDataSource(
-        # Category and sample name displayed in Sample Data module
-        category="Smoothing",
-        sampleName="Smoothing2",
-        thumbnailFileName=os.path.join(iconsPath, "Smoothing2.png"),
-        # Download URL and target file name
-        uris="https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/1a64f3f422eb3d1c9b093d1a18da354b13bcf307907c66317e2463ee530b7a97",
-        fileNames="Smoothing2.nrrd",
-        checksums="SHA256:1a64f3f422eb3d1c9b093d1a18da354b13bcf307907c66317e2463ee530b7a97",
-        # This node name will be used when the data set is loaded
-        nodeNames="Smoothing2",
-    )
 
 
 #
@@ -107,21 +47,20 @@ def registerSampleData():
 
 @parameterNodeWrapper
 class SmoothingParameterNode:
-    """
-    The parameters needed by module.
+    """Parameters for GUI-based segmentation smoothing."""
 
-    inputVolume - The volume to threshold.
-    imageThreshold - The value at which to threshold the input volume.
-    invertThreshold - If true, will invert the threshold.
-    thresholdedVolume - The output volume that will contain the thresholded volume.
-    invertedVolume - The output volume that will contain the inverted thresholded volume.
-    """
+    inputSegmentation: vtkMRMLSegmentationNode
+    referenceVolume: vtkMRMLScalarVolumeNode
+    outputSegmentation: vtkMRMLSegmentationNode
 
-    inputVolume: vtkMRMLScalarVolumeNode
-    imageThreshold: Annotated[float, WithinRange(-100, 500)] = 100
-    invertThreshold: bool = False
-    thresholdedVolume: vtkMRMLScalarVolumeNode
-    invertedVolume: vtkMRMLScalarVolumeNode
+    smoothingMethod: str = "JOINT_TAUBIN"
+    applyScope: str = "VISIBLE_SEGMENTS"
+
+    kernelSizeMm: float = 3.0
+    gaussianStandardDeviationMm: float = 1.0
+    jointTaubinSmoothingFactor: float = 0.5
+
+    overwriteInput: bool = False
 
 
 #
@@ -130,127 +69,228 @@ class SmoothingParameterNode:
 
 
 class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
-    """Uses ScriptedLoadableModuleWidget base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
-    """
+    """Module GUI."""
 
     def __init__(self, parent=None) -> None:
-        """Called when the user opens the module the first time and the widget is initialized."""
         ScriptedLoadableModuleWidget.__init__(self, parent)
-        VTKObservationMixin.__init__(self)  # needed for parameter node observation
+        VTKObservationMixin.__init__(self)
         self.logic = None
         self._parameterNode = None
         self._parameterNodeGuiTag = None
 
     def setup(self) -> None:
-        """Called when the user opens the module the first time and the widget is initialized."""
         ScriptedLoadableModuleWidget.setup(self)
 
-        # Load widget from .ui file (created by Qt Designer).
-        # Additional widgets can be instantiated manually and added to self.layout.
         uiWidget = slicer.util.loadUI(self.resourcePath("UI/Smoothing.ui"))
         self.layout.addWidget(uiWidget)
         self.ui = slicer.util.childWidgetVariables(uiWidget)
-
-        # Set scene in MRML widgets. Make sure that in Qt designer the top-level qMRMLWidget's
-        # "mrmlSceneChanged(vtkMRMLScene*)" signal in is connected to each MRML widget's.
-        # "setMRMLScene(vtkMRMLScene*)" slot.
         uiWidget.setMRMLScene(slicer.mrmlScene)
 
-        # Create logic class. Logic implements all computations that should be possible to run
-        # in batch mode, without a graphical user interface.
         self.logic = SmoothingLogic()
 
-        # Connections
-
-        # These connections ensure that we update parameter node when scene is closed
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
 
-        # Buttons
-        self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
+        self.setupGuiDefaults()
+        self.setupConnections()
 
-        # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
 
     def cleanup(self) -> None:
-        """Called when the application closes and the module widget is destroyed."""
         self.removeObservers()
 
     def enter(self) -> None:
-        """Called each time the user opens this module."""
-        # Make sure parameter node exists and observed
         self.initializeParameterNode()
 
     def exit(self) -> None:
-        """Called each time the user opens a different module."""
-        # Do not react to parameter node changes (GUI will be updated when the user enters into the module)
         if self._parameterNode:
-            self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
-            self._parameterNodeGuiTag = None
+            if self._parameterNodeGuiTag:
+                self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
+                self._parameterNodeGuiTag = None
             self.removeObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
 
+    def setupGuiDefaults(self) -> None:
+        """Initialize GUI values that are not stored directly in the .ui file."""
+
+        self.ui.methodComboBox.clear()
+        self.ui.methodComboBox.addItem("Median", "MEDIAN")
+        self.ui.methodComboBox.addItem("Opening", "MORPHOLOGICAL_OPENING")
+        self.ui.methodComboBox.addItem("Closing", "MORPHOLOGICAL_CLOSING")
+        self.ui.methodComboBox.addItem("Gaussian", "GAUSSIAN")
+        self.ui.methodComboBox.addItem("Joint Taubin", "JOINT_TAUBIN")
+
+        # Default to Joint Taubin because it is safer for multi-segment smoothing.
+        jointTaubinIndex = self.ui.methodComboBox.findData("JOINT_TAUBIN")
+        if jointTaubinIndex >= 0:
+            self.ui.methodComboBox.setCurrentIndex(jointTaubinIndex)
+
+        self.ui.scopeComboBox.clear()
+        self.ui.scopeComboBox.addItem("Visible segments", "VISIBLE_SEGMENTS")
+        self.ui.scopeComboBox.addItem("All segments", "ALL_SEGMENTS")
+
+        self.ui.kernelSizeSliderWidget.value = 3.0
+        self.ui.gaussianStdSliderWidget.value = 1.0
+        self.ui.jointTaubinSliderWidget.value = 0.5
+
+        self.ui.overwriteInputCheckBox.checked = False
+
+        if hasattr(self.ui, "statusLabel"):
+            self.ui.statusLabel.text = "Ready."
+
+        self.updateParameterVisibility()
+        self.updateOutputVisibility()
+
+    def setupConnections(self) -> None:
+        """Connect GUI events."""
+
+        self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
+
+        self.ui.methodComboBox.connect("currentIndexChanged(int)", self.updateParameterVisibility)
+        self.ui.overwriteInputCheckBox.connect("toggled(bool)", self.updateOutputVisibility)
+        self.ui.overwriteInputCheckBox.connect("toggled(bool)", self._checkCanApply)
+
+        self.ui.inputSegmentationSelector.connect("currentNodeChanged(vtkMRMLNode*)", self._checkCanApply)
+        self.ui.referenceVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self._checkCanApply)
+        self.ui.outputSegmentationSelector.connect("currentNodeChanged(vtkMRMLNode*)", self._checkCanApply)
+
     def onSceneStartClose(self, caller, event) -> None:
-        """Called just before the scene is closed."""
-        # Parameter node will be reset, do not use it anymore
         self.setParameterNode(None)
 
     def onSceneEndClose(self, caller, event) -> None:
-        """Called just after the scene is closed."""
-        # If this module is shown while the scene is closed then recreate a new parameter node immediately
         if self.parent.isEntered:
             self.initializeParameterNode()
 
     def initializeParameterNode(self) -> None:
-        """Ensure parameter node exists and observed."""
-        # Parameter node stores all user choices in parameter values, node selections, etc.
-        # so that when the scene is saved and reloaded, these settings are restored.
+        """Ensure parameter node exists and select reasonable defaults."""
 
         self.setParameterNode(self.logic.getParameterNode())
 
-        # Select default input nodes if nothing is selected yet to save a few clicks for the user
-        if not self._parameterNode.inputVolume:
+        if not self._parameterNode:
+            return
+
+        if not self._parameterNode.inputSegmentation:
+            firstSegmentationNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLSegmentationNode")
+            if firstSegmentationNode:
+                self._parameterNode.inputSegmentation = firstSegmentationNode
+
+        if not self._parameterNode.referenceVolume:
             firstVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
             if firstVolumeNode:
-                self._parameterNode.inputVolume = firstVolumeNode
+                self._parameterNode.referenceVolume = firstVolumeNode
 
     def setParameterNode(self, inputParameterNode: SmoothingParameterNode | None) -> None:
-        """
-        Set and observe parameter node.
-        Observation is needed because when the parameter node is changed then the GUI must be updated immediately.
-        """
+        """Set and observe the parameter node."""
 
         if self._parameterNode:
-            self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
+            if self._parameterNodeGuiTag:
+                self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
+                self._parameterNodeGuiTag = None
             self.removeObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
+
         self._parameterNode = inputParameterNode
+
         if self._parameterNode:
-            # Note: in the .ui file, a Qt dynamic property called "SlicerParameterName" is set on each
-            # ui element that needs connection.
+            # Widgets with the SlicerParameterName dynamic property will be connected automatically.
             self._parameterNodeGuiTag = self._parameterNode.connectGui(self.ui)
             self.addObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
-            self._checkCanApply()
+
+        self._checkCanApply()
+
+    def currentComboData(self, comboBox):
+        return comboBox.itemData(comboBox.currentIndex)
+
+    def updateParameterVisibility(self, *args) -> None:
+        """Show only the parameter control relevant to the selected smoothing method."""
+
+        method = self.currentComboData(self.ui.methodComboBox)
+
+        useKernel = method in [
+            "MEDIAN",
+            "MORPHOLOGICAL_OPENING",
+            "MORPHOLOGICAL_CLOSING",
+        ]
+        useGaussian = method == "GAUSSIAN"
+        useJointTaubin = method == "JOINT_TAUBIN"
+
+        self.ui.kernelSizeSliderWidget.visible = useKernel
+        self.ui.gaussianStdSliderWidget.visible = useGaussian
+        self.ui.jointTaubinSliderWidget.visible = useJointTaubin
+
+        if hasattr(self.ui, "kernelSizeLabel"):
+            self.ui.kernelSizeLabel.visible = useKernel
+        if hasattr(self.ui, "gaussianStdLabel"):
+            self.ui.gaussianStdLabel.visible = useGaussian
+        if hasattr(self.ui, "jointTaubinLabel"):
+            self.ui.jointTaubinLabel.visible = useJointTaubin
+
+    def updateOutputVisibility(self, *args) -> None:
+        """Hide output selector when smoothing overwrites the input segmentation."""
+
+        overwrite = self.ui.overwriteInputCheckBox.checked
+
+        if hasattr(self.ui, "outputSegmentationLabel"):
+            self.ui.outputSegmentationLabel.visible = not overwrite
+        self.ui.outputSegmentationSelector.visible = not overwrite
 
     def _checkCanApply(self, caller=None, event=None) -> None:
-        if self._parameterNode and self._parameterNode.inputVolume and self._parameterNode.thresholdedVolume:
-            self.ui.applyButton.toolTip = _("Compute output volume")
-            self.ui.applyButton.enabled = True
+        inputSegmentation = self.ui.inputSegmentationSelector.currentNode()
+        referenceVolume = self.ui.referenceVolumeSelector.currentNode()
+        overwriteInput = self.ui.overwriteInputCheckBox.checked
+        outputSegmentation = self.ui.outputSegmentationSelector.currentNode()
+
+        canApply = inputSegmentation is not None and referenceVolume is not None
+
+        if not overwriteInput:
+            canApply = canApply and outputSegmentation is not None
+
+        self.ui.applyButton.enabled = canApply
+
+        if canApply:
+            self.ui.applyButton.toolTip = _("Apply smoothing to the selected segmentation.")
+            if hasattr(self.ui, "statusLabel"):
+                self.ui.statusLabel.text = "Ready to apply smoothing."
         else:
-            self.ui.applyButton.toolTip = _("Select input and output volume nodes")
-            self.ui.applyButton.enabled = False
+            self.ui.applyButton.toolTip = _("Select input segmentation, reference volume, and output segmentation.")
+            if hasattr(self.ui, "statusLabel"):
+                self.ui.statusLabel.text = "Select the required inputs."
 
     def onApplyButton(self) -> None:
-        """Run processing when user clicks "Apply" button."""
-        with slicer.util.tryWithErrorDisplay(_("Failed to compute results."), waitCursor=True):
-            # Compute output
-            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(),
-                               self.ui.imageThresholdSliderWidget.value, self.ui.invertOutputCheckBox.checked)
+        """Run smoothing when the user clicks Apply."""
 
-            # Compute inverted output (if needed)
-            if self.ui.invertedOutputSelector.currentNode():
-                # If additional output volume is selected then result with inverted threshold is written there
-                self.logic.process(self.ui.inputSelector.currentNode(), self.ui.invertedOutputSelector.currentNode(),
-                                   self.ui.imageThresholdSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
+        with slicer.util.tryWithErrorDisplay(_("Failed to apply smoothing."), waitCursor=True):
+
+            inputSegmentation = self.ui.inputSegmentationSelector.currentNode()
+            referenceVolume = self.ui.referenceVolumeSelector.currentNode()
+
+            method = self.currentComboData(self.ui.methodComboBox)
+            scope = self.currentComboData(self.ui.scopeComboBox)
+
+            overwriteInput = self.ui.overwriteInputCheckBox.checked
+
+            if overwriteInput:
+                outputSegmentation = inputSegmentation
+            else:
+                outputSegmentation = self.ui.outputSegmentationSelector.currentNode()
+                self.logic.cloneSegmentation(inputSegmentation, outputSegmentation)
+
+            if hasattr(self.ui, "statusLabel"):
+                self.ui.statusLabel.text = "Applying smoothing..."
+            slicer.app.processEvents()
+
+            self.logic.smoothSegmentation(
+                segmentationNode=outputSegmentation,
+                referenceVolumeNode=referenceVolume,
+                method=method,
+                scope=scope,
+                kernelSizeMm=self.ui.kernelSizeSliderWidget.value,
+                gaussianStandardDeviationMm=self.ui.gaussianStdSliderWidget.value,
+                jointTaubinSmoothingFactor=self.ui.jointTaubinSliderWidget.value,
+            )
+
+            if hasattr(self.ui, "statusLabel"):
+                self.ui.statusLabel.text = "Smoothing completed."
+
+            slicer.util.infoDisplay("Smoothing completed.")
 
 
 #
@@ -259,59 +299,155 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
 
 class SmoothingLogic(ScriptedLoadableModuleLogic):
-    """This class should implement all the actual
-    computation done by your module.  The interface
-    should be such that other python code can import
-    this class and make use of the functionality without
-    requiring an instance of the Widget.
-    Uses ScriptedLoadableModuleLogic base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
-    """
+    """Computation logic for segmentation smoothing."""
 
     def __init__(self) -> None:
-        """Called when the logic class is instantiated. Can be used for initializing member variables."""
         ScriptedLoadableModuleLogic.__init__(self)
 
     def getParameterNode(self):
         return SmoothingParameterNode(super().getParameterNode())
 
-    def process(self,
-                inputVolume: vtkMRMLScalarVolumeNode,
-                outputVolume: vtkMRMLScalarVolumeNode,
-                imageThreshold: float,
-                invert: bool = False,
-                showResult: bool = True) -> None:
-        """
-        Run the processing algorithm.
-        Can be used without GUI widget.
-        :param inputVolume: volume to be thresholded
-        :param outputVolume: thresholding result
-        :param imageThreshold: values above/below this threshold will be set to 0
-        :param invert: if True then values above the threshold will be set to 0, otherwise values below are set to 0
-        :param showResult: show output volume in slice viewers
-        """
+    def cloneSegmentation(self, inputSegmentationNode, outputSegmentationNode) -> None:
+        """Copy input segmentation content into the output segmentation node."""
 
-        if not inputVolume or not outputVolume:
-            raise ValueError("Input or output volume is invalid")
+        if inputSegmentationNode is None or outputSegmentationNode is None:
+            raise ValueError("Input or output segmentation node is invalid.")
 
-        import time
+        outputSegmentationNode.Copy(inputSegmentationNode)
+        outputSegmentationNode.SetName(inputSegmentationNode.GetName() + "_smoothed")
+        outputSegmentationNode.CreateDefaultDisplayNodes()
+
+    def smoothSegmentation(
+        self,
+        segmentationNode,
+        referenceVolumeNode,
+        method="JOINT_TAUBIN",
+        scope="VISIBLE_SEGMENTS",
+        kernelSizeMm=3.0,
+        gaussianStandardDeviationMm=1.0,
+        jointTaubinSmoothingFactor=0.5,
+    ) -> None:
+        """Apply Slicer's Segment Editor Smoothing effect to a segmentation."""
+
+        if segmentationNode is None:
+            raise ValueError("Segmentation node is invalid.")
+
+        if referenceVolumeNode is None:
+            raise ValueError("Reference volume node is invalid.")
 
         startTime = time.time()
-        logging.info("Processing started")
+        logging.info("Segmentation smoothing started")
 
-        # Compute the thresholded output volume using the "Threshold Scalar Volume" CLI module
-        cliParams = {
-            "InputVolume": inputVolume.GetID(),
-            "OutputVolume": outputVolume.GetID(),
-            "ThresholdValue": imageThreshold,
-            "ThresholdType": "Above" if invert else "Below",
-        }
-        cliNode = slicer.cli.run(slicer.modules.thresholdscalarvolume, None, cliParams, wait_for_completion=True, update_display=showResult)
-        # We don't need the CLI module node anymore, remove it to not clutter the scene with it
-        slicer.mrmlScene.RemoveNode(cliNode)
+        # Make sure binary labelmap representation exists before running Segment Editor effects.
+        segmentationNode.GetSegmentation().CreateRepresentation(
+            slicer.vtkSegmentationConverter.GetSegmentationBinaryLabelmapRepresentationName()
+        )
+
+        segmentEditorWidget = slicer.qMRMLSegmentEditorWidget()
+        segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
+
+        segmentEditorNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode")
+        segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
+
+        segmentEditorWidget.setSegmentationNode(segmentationNode)
+        segmentEditorWidget.setSourceVolumeNode(referenceVolumeNode)
+
+        originalVisibleSegmentIds = self.visibleSegmentIds(segmentationNode)
+
+        try:
+            if scope == "ALL_SEGMENTS":
+                self.setAllSegmentsVisible(segmentationNode, True)
+
+            segmentEditorWidget.setActiveEffectByName("Smoothing")
+            effect = segmentEditorWidget.activeEffect()
+
+            if effect is None:
+                raise RuntimeError("Could not activate Segment Editor Smoothing effect.")
+
+            effect.setParameter("SmoothingMethod", method)
+
+            # Apply to visible segments for both supported scopes.
+            # For ALL_SEGMENTS, all segments were made visible above.
+            effect.setParameter("ApplyToAllVisibleSegments", "1")
+
+            if method in ["MEDIAN", "MORPHOLOGICAL_OPENING", "MORPHOLOGICAL_CLOSING"]:
+                effect.setParameter("KernelSizeMm", str(kernelSizeMm))
+
+            elif method == "GAUSSIAN":
+                effect.setParameter("GaussianStandardDeviationMm", str(gaussianStandardDeviationMm))
+
+            elif method == "JOINT_TAUBIN":
+                effect.setParameter("JointTaubinSmoothingFactor", str(jointTaubinSmoothingFactor))
+
+            else:
+                raise ValueError(f"Unsupported smoothing method: {method}")
+
+            effect.self().onApply()
+
+        finally:
+            if scope == "ALL_SEGMENTS":
+                self.restoreVisibleSegments(segmentationNode, originalVisibleSegmentIds)
+
+            segmentEditorWidget.setMRMLSegmentEditorNode(None)
+            slicer.mrmlScene.RemoveNode(segmentEditorNode)
+            segmentEditorWidget = None
 
         stopTime = time.time()
-        logging.info(f"Processing completed in {stopTime-startTime:.2f} seconds")
+        logging.info(f"Segmentation smoothing completed in {stopTime - startTime:.2f} seconds")
+
+    def visibleSegmentIds(self, segmentationNode):
+        """Return list of currently visible segment IDs."""
+
+        displayNode = segmentationNode.GetDisplayNode()
+        if displayNode is None:
+            segmentationNode.CreateDefaultDisplayNodes()
+            displayNode = segmentationNode.GetDisplayNode()
+
+        segmentation = segmentationNode.GetSegmentation()
+        segmentIds = vtk.vtkStringArray()
+        segmentation.GetSegmentIDs(segmentIds)
+
+        visibleIds = []
+        for i in range(segmentIds.GetNumberOfValues()):
+            segmentId = segmentIds.GetValue(i)
+            if displayNode.GetSegmentVisibility(segmentId):
+                visibleIds.append(segmentId)
+
+        return visibleIds
+
+    def setAllSegmentsVisible(self, segmentationNode, visible=True) -> None:
+        """Set visibility for all segments."""
+
+        displayNode = segmentationNode.GetDisplayNode()
+        if displayNode is None:
+            segmentationNode.CreateDefaultDisplayNodes()
+            displayNode = segmentationNode.GetDisplayNode()
+
+        segmentation = segmentationNode.GetSegmentation()
+        segmentIds = vtk.vtkStringArray()
+        segmentation.GetSegmentIDs(segmentIds)
+
+        for i in range(segmentIds.GetNumberOfValues()):
+            segmentId = segmentIds.GetValue(i)
+            displayNode.SetSegmentVisibility(segmentId, visible)
+
+    def restoreVisibleSegments(self, segmentationNode, visibleSegmentIds) -> None:
+        """Restore segment visibility after temporary all-segment processing."""
+
+        displayNode = segmentationNode.GetDisplayNode()
+        if displayNode is None:
+            segmentationNode.CreateDefaultDisplayNodes()
+            displayNode = segmentationNode.GetDisplayNode()
+
+        segmentation = segmentationNode.GetSegmentation()
+        segmentIds = vtk.vtkStringArray()
+        segmentation.GetSegmentIDs(segmentIds)
+
+        visibleSegmentIds = set(visibleSegmentIds)
+
+        for i in range(segmentIds.GetNumberOfValues()):
+            segmentId = segmentIds.GetValue(i)
+            displayNode.SetSegmentVisibility(segmentId, segmentId in visibleSegmentIds)
 
 
 #
@@ -320,64 +456,17 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
 
 
 class SmoothingTest(ScriptedLoadableModuleTest):
-    """
-    This is the test case for your scripted module.
-    Uses ScriptedLoadableModuleTest base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
-    """
+    """Minimal smoke test for the scripted module."""
 
     def setUp(self):
-        """Do whatever is needed to reset the state - typically a scene clear will be enough."""
         slicer.mrmlScene.Clear()
 
     def runTest(self):
-        """Run as few or as many tests as needed here."""
         self.setUp()
-        self.test_Smoothing1()
+        self.test_SmoothingModuleLoads()
 
-    def test_Smoothing1(self):
-        """Ideally you should have several levels of tests.  At the lowest level
-        tests should exercise the functionality of the logic with different inputs
-        (both valid and invalid).  At higher levels your tests should emulate the
-        way the user would interact with your code and confirm that it still works
-        the way you intended.
-        One of the most important features of the tests is that it should alert other
-        developers when their changes will have an impact on the behavior of your
-        module.  For example, if a developer removes a feature that you depend on,
-        your test should break so they know that the feature is needed.
-        """
-
-        self.delayDisplay("Starting the test")
-
-        # Get/create input data
-
-        import SampleData
-
-        registerSampleData()
-        inputVolume = SampleData.downloadSample("Smoothing1")
-        self.delayDisplay("Loaded test data set")
-
-        inputScalarRange = inputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(inputScalarRange[0], 0)
-        self.assertEqual(inputScalarRange[1], 695)
-
-        outputVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
-        threshold = 100
-
-        # Test the module logic
-
+    def test_SmoothingModuleLoads(self):
+        self.delayDisplay("Testing Smoothing Batch module load")
         logic = SmoothingLogic()
-
-        # Test algorithm with non-inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, True)
-        outputScalarRange = outputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(outputScalarRange[0], inputScalarRange[0])
-        self.assertEqual(outputScalarRange[1], threshold)
-
-        # Test algorithm with inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, False)
-        outputScalarRange = outputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(outputScalarRange[0], inputScalarRange[0])
-        self.assertEqual(outputScalarRange[1], inputScalarRange[1])
-
+        self.assertIsNotNone(logic)
         self.delayDisplay("Test passed")
