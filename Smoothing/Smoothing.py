@@ -23,13 +23,13 @@ class Smoothing(ScriptedLoadableModule):
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
 
-        self.parent.title = _("Smoothing Batch")
+        self.parent.title = _("Smoothing")
         self.parent.categories = [translate("qSlicerAbstractCoreModule", "Segmentation")]
         self.parent.dependencies = ["Segmentations", "SegmentEditor"]
         self.parent.contributors = ["Ben"]
 
         self.parent.helpText = _("""
-Smoothing Batch provides GUI-based postprocessing tools for smoothing 3D Slicer segmentations.
+Smoothing provides GUI-based postprocessing tools for smoothing 3D Slicer segmentations.
 This version allows the user to select one or more smoothing methods from the GUI.
 Each selected method is applied independently to a copy of the original segmentation.""")
 
@@ -829,7 +829,7 @@ class SmoothingTest(ScriptedLoadableModuleTest):
         self.test_SmoothingModuleLoads()
 
     def test_SmoothingModuleLoads(self):
-        self.delayDisplay("Testing Smoothing Batch module load")
+        self.delayDisplay("Testing Smoothing module load")
         logic = SmoothingLogic()
         self.assertIsNotNone(logic)
         self.delayDisplay("Test passed")
