@@ -485,10 +485,9 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
 
     def copySegmentationContent(self, inputSegmentationNode, outputSegmentationNode, outputName=None):
         """
-        Copy segmentation content as independent segment objects.
+        Copy only segmentation content and force an independent display node.
 
-        This avoids shared MRML/display state and avoids keeping identical
-        segment IDs across output segmentation nodes.
+        This avoids shared visibility/display behavior between segmentation nodes.
         """
 
         if inputSegmentationNode is None or outputSegmentationNode is None:
@@ -497,46 +496,47 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
         if outputName:
             outputSegmentationNode.SetName(outputName)
 
-        # Remove previous content.
+        # ------------------------------------------------------------------
+        # 1) Remove any previous display node references from the output node
+        # ------------------------------------------------------------------
+        outputSegmentationNode.RemoveAllDisplayNodeIDs()
+
+        # ------------------------------------------------------------------
+        # 2) Clear old segmentation content
+        # ------------------------------------------------------------------
         outputSegmentationNode.GetSegmentation().RemoveAllSegments()
 
-        inputSegmentation = inputSegmentationNode.GetSegmentation()
-        outputSegmentation = outputSegmentationNode.GetSegmentation()
-
-        # Copy segmentation-level geometry/conversion parameters.
-        outputSegmentation.SetConversionParameter(
-            "ReferenceImageGeometry",
-            inputSegmentation.GetConversionParameter("ReferenceImageGeometry")
+        # ------------------------------------------------------------------
+        # 3) Deep-copy only the internal vtkSegmentation content
+        # ------------------------------------------------------------------
+        outputSegmentationNode.GetSegmentation().DeepCopy(
+            inputSegmentationNode.GetSegmentation()
         )
 
-        # Copy each segment as a completely independent vtkSegment.
-        segmentIds = vtk.vtkStringArray()
-        inputSegmentation.GetSegmentIDs(segmentIds)
+        # ------------------------------------------------------------------
+        # 4) Create a completely new independent display node
+        # ------------------------------------------------------------------
+        outputDisplayNode = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLSegmentationDisplayNode",
+            outputSegmentationNode.GetName() + "_Display"
+        )
 
-        for i in range(segmentIds.GetNumberOfValues()):
-            oldSegmentId = segmentIds.GetValue(i)
-            oldSegment = inputSegmentation.GetSegment(oldSegmentId)
+        outputSegmentationNode.SetAndObserveDisplayNodeID(outputDisplayNode.GetID())
 
-            newSegment = vtk.vtkSegment()
-            newSegment.DeepCopy(oldSegment)
-
-            # Make segment ID unique across outputs.
-            newSegmentId = f"{outputSegmentationNode.GetName()}_{oldSegmentId}"
-
-            outputSegmentation.AddSegment(newSegment, newSegmentId)
-
-        # Force an independent display node.
-        oldDisplayNode = outputSegmentationNode.GetDisplayNode()
-        if oldDisplayNode is not None:
-            outputSegmentationNode.SetAndObserveDisplayNodeID(None)
-            slicer.mrmlScene.RemoveNode(oldDisplayNode)
-
-        outputSegmentationNode.CreateDefaultDisplayNodes()
-
-        # Copy transform if input was transformed.
+        # ------------------------------------------------------------------
+        # 5) Copy transform if input segmentation has one
+        # ------------------------------------------------------------------
         outputSegmentationNode.SetAndObserveTransformNodeID(
             inputSegmentationNode.GetTransformNodeID()
         )
+
+        # ------------------------------------------------------------------
+        # 6) Optional: make output visible
+        # ------------------------------------------------------------------
+        outputDisplayNode.SetVisibility(True)
+        outputDisplayNode.SetVisibility3D(True)
+        outputDisplayNode.SetVisibility2DFill(True)
+        outputDisplayNode.SetVisibility2DOutline(True)
     def cloneSegmentation(self, inputSegmentationNode, outputSegmentationNode) -> None:
         """Copy input segmentation content into the output segmentation node."""
 
@@ -721,17 +721,18 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
         outputNodes = []
 
         for stepIndex, step in enumerate(steps, start=1):
-
             methodName = step.get("name", step.get("method", f"Step{stepIndex}"))
             safeMethodName = self.safeNodeName(methodName)
 
             outputName = f"{inputSegmentationNode.GetName()}_{safeMethodName}_smoothed"
 
-            if len(steps) == 1 and baseOutputSegmentationNode is not None:
-                # Use the user-selected output node, but copy only segmentation content.
+            if (
+                len(steps) == 1
+                and baseOutputSegmentationNode is not None
+                and baseOutputSegmentationNode != inputSegmentationNode
+            ):
                 outputNode = baseOutputSegmentationNode
             else:
-                # Create one independent output segmentation per method.
                 outputNode = slicer.mrmlScene.AddNewNodeByClass(
                     "vtkMRMLSegmentationNode",
                     outputName,
