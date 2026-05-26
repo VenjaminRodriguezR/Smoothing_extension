@@ -1,6 +1,6 @@
 import logging
 import time
-
+import os
 import vtk
 
 import slicer
@@ -11,7 +11,8 @@ from slicer.util import VTKObservationMixin
 from slicer.parameterNodeWrapper import parameterNodeWrapper
 
 from slicer import vtkMRMLScalarVolumeNode, vtkMRMLSegmentationNode
-
+from typing import Annotated
+from slicer.parameterNodeWrapper import parameterNodeWrapper, Choice
 #
 # Smoothing
 #
@@ -50,7 +51,11 @@ class SmoothingParameterNode:
     referenceVolume: vtkMRMLScalarVolumeNode
     outputSegmentation: vtkMRMLSegmentationNode
 
-    applyScope: str = "VISIBLE_SEGMENTS"
+    applyScope: Annotated[
+        str,
+        Choice(["VISIBLE_SEGMENTS", "ALL_SEGMENTS"])
+    ] = "VISIBLE_SEGMENTS"
+
 
     medianEnabled: bool = False
     openingEnabled: bool = False
@@ -478,15 +483,68 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
     def getParameterNode(self):
         return SmoothingParameterNode(super().getParameterNode())
 
-    def cloneSegmentation(self, inputSegmentationNode, outputSegmentationNode) -> None:
-        """Copy input segmentation content into the output segmentation node."""
+    def copySegmentationContent(self, inputSegmentationNode, outputSegmentationNode, outputName=None):
+        """
+        Copy segmentation content as independent segment objects.
+
+        This avoids shared MRML/display state and avoids keeping identical
+        segment IDs across output segmentation nodes.
+        """
 
         if inputSegmentationNode is None or outputSegmentationNode is None:
             raise ValueError("Input or output segmentation node is invalid.")
 
-        outputSegmentationNode.Copy(inputSegmentationNode)
-        outputSegmentationNode.SetName(inputSegmentationNode.GetName() + "_smoothed")
+        if outputName:
+            outputSegmentationNode.SetName(outputName)
+
+        # Remove previous content.
+        outputSegmentationNode.GetSegmentation().RemoveAllSegments()
+
+        inputSegmentation = inputSegmentationNode.GetSegmentation()
+        outputSegmentation = outputSegmentationNode.GetSegmentation()
+
+        # Copy segmentation-level geometry/conversion parameters.
+        outputSegmentation.SetConversionParameter(
+            "ReferenceImageGeometry",
+            inputSegmentation.GetConversionParameter("ReferenceImageGeometry")
+        )
+
+        # Copy each segment as a completely independent vtkSegment.
+        segmentIds = vtk.vtkStringArray()
+        inputSegmentation.GetSegmentIDs(segmentIds)
+
+        for i in range(segmentIds.GetNumberOfValues()):
+            oldSegmentId = segmentIds.GetValue(i)
+            oldSegment = inputSegmentation.GetSegment(oldSegmentId)
+
+            newSegment = vtk.vtkSegment()
+            newSegment.DeepCopy(oldSegment)
+
+            # Make segment ID unique across outputs.
+            newSegmentId = f"{outputSegmentationNode.GetName()}_{oldSegmentId}"
+
+            outputSegmentation.AddSegment(newSegment, newSegmentId)
+
+        # Force an independent display node.
+        oldDisplayNode = outputSegmentationNode.GetDisplayNode()
+        if oldDisplayNode is not None:
+            outputSegmentationNode.SetAndObserveDisplayNodeID(None)
+            slicer.mrmlScene.RemoveNode(oldDisplayNode)
+
         outputSegmentationNode.CreateDefaultDisplayNodes()
+
+        # Copy transform if input was transformed.
+        outputSegmentationNode.SetAndObserveTransformNodeID(
+            inputSegmentationNode.GetTransformNodeID()
+        )
+    def cloneSegmentation(self, inputSegmentationNode, outputSegmentationNode) -> None:
+        """Copy input segmentation content into the output segmentation node."""
+
+        self.copySegmentationContent(
+            inputSegmentationNode=inputSegmentationNode,
+            outputSegmentationNode=outputSegmentationNode,
+            outputName=inputSegmentationNode.GetName() + "_smoothed",
+        )
 
     def smoothSegmentationPipeline(
         self,
@@ -667,22 +725,23 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
             methodName = step.get("name", step.get("method", f"Step{stepIndex}"))
             safeMethodName = self.safeNodeName(methodName)
 
+            outputName = f"{inputSegmentationNode.GetName()}_{safeMethodName}_smoothed"
+
             if len(steps) == 1 and baseOutputSegmentationNode is not None:
-                # If only one method is selected, use the user-selected output node.
+                # Use the user-selected output node, but copy only segmentation content.
                 outputNode = baseOutputSegmentationNode
-                outputNode.Copy(inputSegmentationNode)
-                outputNode.SetName(
-                    f"{inputSegmentationNode.GetName()}_{safeMethodName}_smoothed"
-                )
-                outputNode.CreateDefaultDisplayNodes()
             else:
-                # If multiple methods are selected, create one output segmentation per method.
+                # Create one independent output segmentation per method.
                 outputNode = slicer.mrmlScene.AddNewNodeByClass(
                     "vtkMRMLSegmentationNode",
-                    f"{inputSegmentationNode.GetName()}_{safeMethodName}_smoothed",
+                    outputName,
                 )
-                outputNode.Copy(inputSegmentationNode)
-                outputNode.CreateDefaultDisplayNodes()
+
+            self.copySegmentationContent(
+                inputSegmentationNode=inputSegmentationNode,
+                outputSegmentationNode=outputNode,
+                outputName=outputName,
+            )
 
             logging.info(
                 f"Applying independent smoothing {stepIndex}/{len(steps)}: {methodName}"
@@ -816,20 +875,317 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
 #
 # SmoothingTest
 #
+#
+# SmoothingTest
+#
 
 
 class SmoothingTest(ScriptedLoadableModuleTest):
-    """Minimal smoke test for the scripted module."""
+    """
+    Test Smoothing module using one random volume/segmentation pair
+    from the extension Data folder.
+
+    Expected Data folder structure:
+        Smoothing/
+            Smoothing.py
+            Data/
+                case01_volume.nrrd
+                case01_segmentation.seg.nrrd
+
+    The test searches for volume files and segmentation files with matching
+    basename fragments, then randomly selects one pair.
+    """
 
     def setUp(self):
         slicer.mrmlScene.Clear()
 
     def runTest(self):
         self.setUp()
-        self.test_SmoothingModuleLoads()
+        self.test_LoadRandomDataAndApplyAllSmoothingMethods()
 
-    def test_SmoothingModuleLoads(self):
-        self.delayDisplay("Testing Smoothing module load")
+    def test_LoadRandomDataAndApplyAllSmoothingMethods(self):
+        import os
+        import random
+        self.delayDisplay("Testing Smoothing with random data pair")
+
         logic = SmoothingLogic()
         self.assertIsNotNone(logic)
-        self.delayDisplay("Test passed")
+
+        # ------------------------------------------------------------
+        # 1) Locate extension data folder
+        # ------------------------------------------------------------
+        moduleDir = os.path.dirname(os.path.abspath(__file__))
+
+        # Smoothing.py is inside:
+        #   SMOOTHING_EXTENSION/Smoothing/Smoothing.py
+        #
+        # The data folder is at:
+        #   SMOOTHING_EXTENSION/data
+        extensionRootDir = os.path.abspath(os.path.join(moduleDir, os.pardir))
+        dataDir = os.path.join(extensionRootDir, "data")
+
+        self.assertTrue(
+            os.path.isdir(dataDir),
+            f"Data folder not found: {dataDir}"
+        )
+
+        # ------------------------------------------------------------
+        # 2) Find candidate volume and segmentation files
+        # ------------------------------------------------------------
+        volumeExtensions = [
+            ".nii",
+            ".nii.gz",
+            ".nrrd",
+            ".nhdr",
+            ".mha",
+            ".mhd",
+        ]
+
+        segmentationExtensions = [
+            ".seg.nrrd",
+            ".seg.nhdr",
+            ".seg.vtm",
+            ".seg.vtk",
+            ".nrrd",
+            ".nii",
+            ".nii.gz",
+        ]
+
+        allFiles = []
+        for root, dirs, files in os.walk(dataDir):
+            for fileName in files:
+                allFiles.append(os.path.join(root, fileName))
+
+        segmentationFiles = [
+            f for f in allFiles
+            if self._isSegmentationFile(f, segmentationExtensions)
+        ]
+
+        volumeFiles = [
+            f for f in allFiles
+            if self._isVolumeFile(f, volumeExtensions)
+            and not self._isSegmentationFile(f, segmentationExtensions)
+        ]
+
+        self.assertGreater(
+            len(volumeFiles),
+            0,
+            f"No volume files found in: {dataDir}"
+        )
+
+        self.assertGreater(
+            len(segmentationFiles),
+            0,
+            f"No segmentation files found in: {dataDir}"
+        )
+
+        # ------------------------------------------------------------
+        # 3) Match volume and segmentation files by normalized basename
+        # ------------------------------------------------------------
+        pairs = self._findVolumeSegmentationPairs(volumeFiles, segmentationFiles)
+
+        self.assertGreater(
+            len(pairs),
+            0,
+            (
+                "No matching volume/segmentation pairs found. "
+                "Use related file names such as: "
+                "'case01_volume.nrrd' and 'case01_segmentation.seg.nrrd'."
+            )
+        )
+
+        volumePath, segmentationPath = random.choice(pairs)
+
+        self.delayDisplay(f"Selected volume: {os.path.basename(volumePath)}")
+        self.delayDisplay(f"Selected segmentation: {os.path.basename(segmentationPath)}")
+
+        # ------------------------------------------------------------
+        # 4) Load selected volume and segmentation
+        # ------------------------------------------------------------
+        referenceVolumeNode = slicer.util.loadVolume(volumePath)
+
+        self.assertIsNotNone(
+            referenceVolumeNode,
+            f"Failed to load volume: {volumePath}"
+        )
+
+        segmentationNode = slicer.util.loadSegmentation(segmentationPath)
+
+        self.assertIsNotNone(
+            segmentationNode,
+            f"Failed to load segmentation: {segmentationPath}"
+        )
+
+        segmentationNode.CreateDefaultDisplayNodes()
+
+        self.assertGreater(
+            segmentationNode.GetSegmentation().GetNumberOfSegments(),
+            0,
+            "Loaded segmentation does not contain any segments."
+        )
+
+        # ------------------------------------------------------------
+        # 5) Define all smoothing algorithms with default parameters
+        # ------------------------------------------------------------
+        smoothingSteps = [
+            {
+                "method": "MEDIAN",
+                "name": "Median",
+                "kernelSizeMm": 3.0,
+            },
+            {
+                "method": "MORPHOLOGICAL_OPENING",
+                "name": "Opening",
+                "kernelSizeMm": 3.0,
+            },
+            {
+                "method": "MORPHOLOGICAL_CLOSING",
+                "name": "Closing",
+                "kernelSizeMm": 3.0,
+            },
+            {
+                "method": "GAUSSIAN",
+                "name": "Gaussian",
+                "gaussianStandardDeviationMm": 1.0,
+            },
+            {
+                "method": "JOINT_TAUBIN",
+                "name": "Joint Taubin",
+                "jointTaubinSmoothingFactor": 0.5,
+            },
+        ]
+
+        # ------------------------------------------------------------
+        # 6) Apply all algorithms independently to the original segmentation
+        # ------------------------------------------------------------
+        outputNodes = logic.smoothSegmentationIndependently(
+            inputSegmentationNode=segmentationNode,
+            referenceVolumeNode=referenceVolumeNode,
+            steps=smoothingSteps,
+            scope="ALL_SEGMENTS",
+            baseOutputSegmentationNode=None,
+        )
+
+        self.assertEqual(
+            len(outputNodes),
+            len(smoothingSteps),
+            "Unexpected number of output segmentations."
+        )
+
+        # ------------------------------------------------------------
+        # 7) Validate outputs
+        # ------------------------------------------------------------
+        inputSegmentCount = segmentationNode.GetSegmentation().GetNumberOfSegments()
+
+        for outputNode in outputNodes:
+            self.assertIsNotNone(outputNode)
+            self.assertIsInstance(outputNode, slicer.vtkMRMLSegmentationNode)
+
+            outputSegmentCount = outputNode.GetSegmentation().GetNumberOfSegments()
+
+            self.assertEqual(
+                outputSegmentCount,
+                inputSegmentCount,
+                (
+                    f"Output segmentation '{outputNode.GetName()}' has a different "
+                    "number of segments than the input segmentation."
+                )
+            )
+
+            outputNode.GetSegmentation().CreateRepresentation(
+                slicer.vtkSegmentationConverter.GetSegmentationBinaryLabelmapRepresentationName()
+            )
+
+        self.delayDisplay(
+            f"Test passed. Applied {len(smoothingSteps)} smoothing algorithms."
+        )
+
+    def _isVolumeFile(self, filePath, volumeExtensions):
+        fileName = os.path.basename(filePath).lower()
+        return any(fileName.endswith(ext) for ext in volumeExtensions)
+
+    def _isSegmentationFile(self, filePath, segmentationExtensions):
+        fileName = os.path.basename(filePath).lower()
+
+        # Prefer explicit Slicer segmentation names.
+        if ".seg." in fileName:
+            return True
+
+        # Also allow files clearly named as segmentation/label/mask.
+        segmentationKeywords = [
+            "seg",
+            "segmentation",
+            "label",
+            "labels",
+            "mask",
+        ]
+
+        hasSegmentationKeyword = any(
+            keyword in fileName for keyword in segmentationKeywords
+        )
+
+        hasSupportedExtension = any(
+            fileName.endswith(ext) for ext in segmentationExtensions
+        )
+
+        return hasSegmentationKeyword and hasSupportedExtension
+
+    def _sampleIdFromFileName(self, filePath):
+        """
+        Extract sample ID from file names such as:
+
+            Volume_001.nrrd
+            Volume_001.nii.gz
+            Segmentation_001.seg.nrrd
+            Segmentation_001.nrrd
+
+        Returns:
+            "001"
+        """
+
+        import os
+        import re
+
+        fileName = os.path.basename(filePath)
+
+        match = re.search(
+            r"^(Volume|Segmentation)_(.+?)(\.seg)?(\.nii\.gz|\.nii|\.nrrd|\.nhdr|\.mha|\.mhd|\.vtk|\.vtm)$",
+            fileName,
+            flags=re.IGNORECASE,
+        )
+
+        if not match:
+            return None
+
+        return match.group(2)
+
+
+    def _findVolumeSegmentationPairs(self, volumeFiles, segmentationFiles):
+        """
+        Match files using the sample ID after Volume_ and Segmentation_.
+
+        Example:
+            Volume_012.nrrd
+            Segmentation_012.seg.nrrd
+        """
+
+        segmentationBySampleId = {}
+
+        for segmentationFile in segmentationFiles:
+            sampleId = self._sampleIdFromFileName(segmentationFile)
+            if sampleId is not None:
+                segmentationBySampleId.setdefault(sampleId, []).append(segmentationFile)
+
+        pairs = []
+
+        for volumeFile in volumeFiles:
+            sampleId = self._sampleIdFromFileName(volumeFile)
+
+            if sampleId is None:
+                continue
+
+            if sampleId in segmentationBySampleId:
+                for segmentationFile in segmentationBySampleId[sampleId]:
+                    pairs.append((volumeFile, segmentationFile))
+
+        return pairs
