@@ -15,7 +15,7 @@ from slicer.parameterNodeWrapper import parameterNodeWrapper
 
 from slicer import vtkMRMLScalarVolumeNode, vtkMRMLSegmentationNode
 from typing import Annotated
-from slicer.parameterNodeWrapper import parameterNodeWrapper, Choice
+from slicer.parameterNodeWrapper import parameterNodeWrapper, Choice, WithinRange
 #
 # Smoothing
 #
@@ -59,18 +59,17 @@ class SmoothingParameterNode:
         Choice(["VISIBLE_SEGMENTS", "ALL_SEGMENTS"])
     ] = "VISIBLE_SEGMENTS"
 
-
     medianEnabled: bool = False
     openingEnabled: bool = False
     closingEnabled: bool = False
     gaussianEnabled: bool = False
     jointTaubinEnabled: bool = True
 
-    medianKernelSizeMm: float = 3.0
-    openingKernelSizeMm: float = 3.0
-    closingKernelSizeMm: float = 3.0
-    gaussianStandardDeviationMm: float = 1.0
-    jointTaubinSmoothingFactor: float = 0.5
+    medianKernelSizeMm: Annotated[float, WithinRange(0.1, 20.0)] = 3.0
+    openingKernelSizeMm: Annotated[float, WithinRange(0.1, 20.0)] = 3.0
+    closingKernelSizeMm: Annotated[float, WithinRange(0.1, 20.0)] = 3.0
+    gaussianStandardDeviationMm: Annotated[float, WithinRange(0.1, 10.0)] = 1.0
+    jointTaubinSmoothingFactor: Annotated[float, WithinRange(0.01, 1.0)] = 0.5
 
     overwriteInput: bool = False
 #
@@ -653,6 +652,18 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                     )
                 )
 
+                failureText = ""
+
+                if len(summary["failed_pairs"]) > 0:
+                    failureLines = []
+
+                    for failedPair in summary["failed_pairs"]:
+                        failureLines.append(
+                            f"- Sample {failedPair['sampleId']}: {failedPair['error']}"
+                        )
+
+                    failureText = "\n\nFailures:\n" + "\n".join(failureLines)
+
                 slicer.util.infoDisplay(
                     f"Batch smoothing completed.\n\n"
                     f"Found pairs: {summary['found_pairs']}\n"
@@ -660,6 +671,7 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                     f"Saved outputs: {summary['saved_outputs']}\n"
                     f"Failed pairs: {len(summary['failed_pairs'])}\n"
                     f"Output folder:\n{outputFolder}"
+                    f"{failureText}"
                 )
 
                 return
@@ -723,6 +735,82 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
     def __init__(self) -> None:
         ScriptedLoadableModuleLogic.__init__(self)
 
+    def loadSegmentationNodeRobust(self, segmentationPath, referenceVolumeNode=None):
+        """
+        Load a segmentation file robustly.
+
+        First tries slicer.util.loadSegmentation().
+        If that fails, tries to load the file as a labelmap volume and convert it
+        to a segmentation node.
+
+        This is needed because .nrrd files may be either:
+            - true Slicer segmentation files: .seg.nrrd
+            - labelmap volumes: .nrrd
+        """
+
+        logging.info(f"[BATCH LOAD] Trying to load segmentation: {segmentationPath}")
+
+        try:
+            segmentationNode = slicer.util.loadSegmentation(segmentationPath)
+        except Exception as exc:
+            logging.warning(
+                f"[BATCH LOAD] loadSegmentation raised an exception: {str(exc)}"
+            )
+            segmentationNode = None
+
+        if segmentationNode is not None:
+            logging.info(
+                f"[BATCH LOAD] Loaded as segmentation node: {segmentationNode.GetName()}"
+            )
+            return segmentationNode
+
+        logging.warning(
+            f"[BATCH LOAD] loadSegmentation failed. Trying as labelmap volume: {segmentationPath}"
+        )
+
+        try:
+            labelmapNode = slicer.util.loadLabelVolume(segmentationPath)
+        except Exception as exc:
+            logging.warning(
+                f"[BATCH LOAD] loadLabelVolume raised an exception: {str(exc)}"
+            )
+            labelmapNode = None
+
+        if labelmapNode is None:
+            raise RuntimeError(
+                f"Failed to load segmentation as .seg.nrrd or labelmap: {segmentationPath}"
+            )
+
+        segmentationNode = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLSegmentationNode",
+            os.path.splitext(os.path.basename(segmentationPath))[0] + "_Segmentation",
+        )
+
+        segmentationNode.CreateDefaultDisplayNodes()
+
+        if referenceVolumeNode is not None:
+            segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(referenceVolumeNode)
+
+        slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(
+            labelmapNode,
+            segmentationNode,
+        )
+
+        slicer.mrmlScene.RemoveNode(labelmapNode)
+
+        if segmentationNode.GetSegmentation().GetNumberOfSegments() == 0:
+            raise RuntimeError(
+                f"Loaded labelmap but no segments were imported: {segmentationPath}"
+            )
+
+        logging.info(
+            f"[BATCH LOAD] Loaded labelmap and converted to segmentation: "
+            f"{segmentationNode.GetName()} with "
+            f"{segmentationNode.GetSegmentation().GetNumberOfSegments()} segment(s)"
+        )
+
+        return segmentationNode
+    
     def getParameterNode(self):
         return SmoothingParameterNode(super().getParameterNode())
 
@@ -1228,16 +1316,16 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
         Matching rule:
             Volume_XXX.ext
             Segmentation_XXX.ext
-
-        Example:
-            Volume_012.nrrd
-            Segmentation_012.seg.nrrd
         """
 
         if not os.path.isdir(folderPath):
             raise ValueError(f"Folder does not exist: {folderPath}")
 
         allFiles = self.collectFilesFromFolder(folderPath, recursive=recursive)
+
+        logging.info(f"[BATCH PAIRING] Folder: {folderPath}")
+        logging.info(f"[BATCH PAIRING] Recursive: {recursive}")
+        logging.info(f"[BATCH PAIRING] Total files found: {len(allFiles)}")
 
         volumeFiles = [
             filePath for filePath in allFiles
@@ -1249,10 +1337,24 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
             if self.isSegmentationFile(filePath)
         ]
 
+        logging.info(f"[BATCH PAIRING] Candidate volume files: {len(volumeFiles)}")
+        for filePath in volumeFiles:
+            logging.info(f"[BATCH PAIRING] Volume candidate: {os.path.basename(filePath)}")
+
+        logging.info(f"[BATCH PAIRING] Candidate segmentation files: {len(segmentationFiles)}")
+        for filePath in segmentationFiles:
+            logging.info(f"[BATCH PAIRING] Segmentation candidate: {os.path.basename(filePath)}")
+
         segmentationBySampleId = {}
 
         for segmentationFile in segmentationFiles:
             sampleId = self.sampleIdFromFileName(segmentationFile)
+
+            logging.info(
+                f"[BATCH PAIRING] Segmentation sample ID: "
+                f"{os.path.basename(segmentationFile)} -> {sampleId}"
+            )
+
             if sampleId is not None:
                 segmentationBySampleId.setdefault(sampleId, []).append(segmentationFile)
 
@@ -1260,6 +1362,11 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
 
         for volumeFile in volumeFiles:
             sampleId = self.sampleIdFromFileName(volumeFile)
+
+            logging.info(
+                f"[BATCH PAIRING] Volume sample ID: "
+                f"{os.path.basename(volumeFile)} -> {sampleId}"
+            )
 
             if sampleId is None:
                 continue
@@ -1274,8 +1381,15 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
                         }
                     )
 
-        return pairs
+                    logging.info(
+                        f"[BATCH PAIRING] Pair found: "
+                        f"{os.path.basename(volumeFile)} + "
+                        f"{os.path.basename(segmentationFile)}"
+                    )
 
+        logging.info(f"[BATCH PAIRING] Total pairs found: {len(pairs)}")
+
+        return pairs
 
     def batchSmoothSegmentations(
         self,
@@ -1375,17 +1489,32 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
             outputNodes = []
 
             try:
+                logging.info(f"[BATCH LOAD] Loading volume: {volumePath}")
+
                 referenceVolumeNode = slicer.util.loadVolume(volumePath)
+
                 if referenceVolumeNode is None:
                     raise RuntimeError(f"Failed to load volume: {volumePath}")
 
+                logging.info(f"[BATCH LOAD] Loaded volume node: {referenceVolumeNode.GetName()}")
+
                 loadedNodes.append(referenceVolumeNode)
 
-                segmentationNode = slicer.util.loadSegmentation(segmentationPath)
+                segmentationNode = self.loadSegmentationNodeRobust(
+                    segmentationPath=segmentationPath,
+                    referenceVolumeNode=referenceVolumeNode,
+                )
+
                 if segmentationNode is None:
                     raise RuntimeError(f"Failed to load segmentation: {segmentationPath}")
 
                 segmentationNode.CreateDefaultDisplayNodes()
+
+                logging.info(
+                    f"[BATCH LOAD] Loaded segmentation node: {segmentationNode.GetName()} "
+                    f"with {segmentationNode.GetSegmentation().GetNumberOfSegments()} segment(s)"
+                )
+
                 loadedNodes.append(segmentationNode)
 
                 if segmentationNode.GetSegmentation().GetNumberOfSegments() == 0:
@@ -1819,32 +1948,84 @@ class SmoothingTest(ScriptedLoadableModuleTest):
         return match.group(2)
 
 
-    def _findVolumeSegmentationPairs(self, volumeFiles, segmentationFiles):
+    def _findVolumeSegmentationPairs(self, folderPath, recursive=True):
         """
-        Match files using the sample ID after Volume_ and Segmentation_.
+        Find matching volume/segmentation pairs in a folder.
 
-        Example:
-            Volume_012.nrrd
-            Segmentation_012.seg.nrrd
+        Matching rule:
+            Volume_XXX.ext
+            Segmentation_XXX.ext
         """
+
+        if not os.path.isdir(folderPath):
+            raise ValueError(f"Folder does not exist: {folderPath}")
+
+        allFiles = self.collectFilesFromFolder(folderPath, recursive=recursive)
+
+        logging.info(f"[BATCH PAIRING] Folder: {folderPath}")
+        logging.info(f"[BATCH PAIRING] Recursive: {recursive}")
+        logging.info(f"[BATCH PAIRING] Total files found: {len(allFiles)}")
+
+        volumeFiles = [
+            filePath for filePath in allFiles
+            if self.isVolumeFile(filePath)
+        ]
+
+        segmentationFiles = [
+            filePath for filePath in allFiles
+            if self.isSegmentationFile(filePath)
+        ]
+
+        logging.info(f"[BATCH PAIRING] Candidate volume files: {len(volumeFiles)}")
+        for filePath in volumeFiles:
+            logging.info(f"[BATCH PAIRING] Volume candidate: {os.path.basename(filePath)}")
+
+        logging.info(f"[BATCH PAIRING] Candidate segmentation files: {len(segmentationFiles)}")
+        for filePath in segmentationFiles:
+            logging.info(f"[BATCH PAIRING] Segmentation candidate: {os.path.basename(filePath)}")
 
         segmentationBySampleId = {}
 
         for segmentationFile in segmentationFiles:
-            sampleId = self._sampleIdFromFileName(segmentationFile)
+            sampleId = self.sampleIdFromFileName(segmentationFile)
+
+            logging.info(
+                f"[BATCH PAIRING] Segmentation sample ID: "
+                f"{os.path.basename(segmentationFile)} -> {sampleId}"
+            )
+
             if sampleId is not None:
                 segmentationBySampleId.setdefault(sampleId, []).append(segmentationFile)
 
         pairs = []
 
         for volumeFile in volumeFiles:
-            sampleId = self._sampleIdFromFileName(volumeFile)
+            sampleId = self.sampleIdFromFileName(volumeFile)
+
+            logging.info(
+                f"[BATCH PAIRING] Volume sample ID: "
+                f"{os.path.basename(volumeFile)} -> {sampleId}"
+            )
 
             if sampleId is None:
                 continue
 
             if sampleId in segmentationBySampleId:
                 for segmentationFile in segmentationBySampleId[sampleId]:
-                    pairs.append((volumeFile, segmentationFile))
+                    pairs.append(
+                        {
+                            "sampleId": sampleId,
+                            "volumePath": volumeFile,
+                            "segmentationPath": segmentationFile,
+                        }
+                    )
+
+                    logging.info(
+                        f"[BATCH PAIRING] Pair found: "
+                        f"{os.path.basename(volumeFile)} + "
+                        f"{os.path.basename(segmentationFile)}"
+                    )
+
+        logging.info(f"[BATCH PAIRING] Total pairs found: {len(pairs)}")
 
         return pairs
