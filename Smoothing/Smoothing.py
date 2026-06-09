@@ -2,6 +2,9 @@ import logging
 import time
 import os
 import vtk
+import re 
+import qt
+import ctk
 
 import slicer
 from slicer.i18n import tr as _
@@ -99,11 +102,169 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
 
+        self.setupBatchGui()
+        self.setupProgressGui()
         self.setupGuiDefaults()
         self.setupConnections()
 
         self.initializeParameterNode()
+    
+    def setupProgressGui(self) -> None:
+        """
+        Add progress bars for normal smoothing and batch processing.
+        """
 
+        self.progressCollapsibleButton = ctk.ctkCollapsibleButton()
+        self.progressCollapsibleButton.text = "Progress"
+        self.progressCollapsibleButton.collapsed = False
+
+        # Put progress near the bottom, before the final spacer if possible.
+        self.layout.insertWidget(self.layout.count() - 1, self.progressCollapsibleButton)
+
+        progressLayout = qt.QFormLayout(self.progressCollapsibleButton)
+
+        self.batchProgressBar = qt.QProgressBar()
+        self.batchProgressBar.minimum = 0
+        self.batchProgressBar.maximum = 100
+        self.batchProgressBar.value = 0
+        self.batchProgressBar.textVisible = True
+        progressLayout.addRow("Batch:", self.batchProgressBar)
+        
+    def setupBatchGui(self) -> None:
+        """
+        Add batch-processing controls programmatically.
+
+        This avoids having to manually edit Smoothing.ui for now.
+        Batch mode processes a folder containing paired files such as:
+
+            Volume_001.nrrd
+            Segmentation_001.seg.nrrd
+
+        and writes one output segmentation per selected smoothing method.
+        """
+
+        self.batchCollapsibleButton = ctk.ctkCollapsibleButton()
+        self.batchCollapsibleButton.text = "Batch processing"
+        self.batchCollapsibleButton.collapsed = True
+        self.layout.addWidget(self.batchCollapsibleButton)
+
+        batchLayout = qt.QFormLayout(self.batchCollapsibleButton)
+
+        self.batchModeCheckBox = qt.QCheckBox()
+        self.batchModeCheckBox.text = "Enable batch processing from folder"
+        self.batchModeCheckBox.checked = False
+        batchLayout.addRow(self.batchModeCheckBox)
+
+        self.batchInputFolderLineEdit = qt.QLineEdit()
+        self.batchInputFolderLineEdit.placeholderText = "Folder containing Volume_XXX and Segmentation_XXX files"
+
+        self.batchInputFolderButton = qt.QPushButton("Browse...")
+        inputFolderLayout = qt.QHBoxLayout()
+        inputFolderLayout.addWidget(self.batchInputFolderLineEdit)
+        inputFolderLayout.addWidget(self.batchInputFolderButton)
+        batchLayout.addRow("Input folder:", inputFolderLayout)
+
+        self.batchOutputFolderLineEdit = qt.QLineEdit()
+        self.batchOutputFolderLineEdit.placeholderText = "Folder where smoothed segmentations will be saved"
+
+        self.batchOutputFolderButton = qt.QPushButton("Browse...")
+        outputFolderLayout = qt.QHBoxLayout()
+        outputFolderLayout.addWidget(self.batchOutputFolderLineEdit)
+        outputFolderLayout.addWidget(self.batchOutputFolderButton)
+        batchLayout.addRow("Output folder:", outputFolderLayout)
+
+        self.batchRecursiveCheckBox = qt.QCheckBox()
+        self.batchRecursiveCheckBox.text = "Search recursively"
+        self.batchRecursiveCheckBox.checked = True
+        batchLayout.addRow(self.batchRecursiveCheckBox)
+
+        self.batchKeepLoadedNodesCheckBox = qt.QCheckBox()
+        self.batchKeepLoadedNodesCheckBox.text = "Keep loaded batch nodes in scene"
+        self.batchKeepLoadedNodesCheckBox.checked = False
+        batchLayout.addRow(self.batchKeepLoadedNodesCheckBox)
+
+        self.batchModeCheckBox.connect("toggled(bool)", self.onBatchModeChanged)
+        self.batchInputFolderButton.connect("clicked(bool)", self.onBrowseBatchInputFolder)
+        self.batchOutputFolderButton.connect("clicked(bool)", self.onBrowseBatchOutputFolder)
+        self.batchInputFolderLineEdit.connect("textChanged(QString)", self._checkCanApply)
+        self.batchOutputFolderLineEdit.connect("textChanged(QString)", self._checkCanApply)
+        self.batchRecursiveCheckBox.connect("toggled(bool)", self._checkCanApply)
+
+    def resetProgressBars(self) -> None:
+        """Reset progress bars."""
+
+        if hasattr(self, "batchProgressBar"):
+            self.batchProgressBar.setValue(0)
+            self.batchProgressBar.repaint()
+
+        slicer.app.processEvents()
+
+
+    def updateBatchProgress(self, value, text=None) -> None:
+        """Update batch progress bar."""
+
+        value = max(0, min(100, int(value)))
+
+        if hasattr(self, "batchProgressBar"):
+            self.batchProgressBar.setValue(value)
+            self.batchProgressBar.repaint()
+
+        if text and hasattr(self.ui, "statusLabel"):
+            self.ui.statusLabel.text = text
+            self.ui.statusLabel.repaint()
+
+        slicer.util.showStatusMessage(text or f"Batch progress: {value}%")
+        slicer.app.processEvents()
+        
+    def onBatchModeChanged(self, checked=False) -> None:
+        """
+        Update GUI state when batch mode is enabled or disabled.
+
+        In batch mode, the input/output MRML selectors are not required.
+        The selected folder is used instead.
+        """
+
+        batchMode = self.batchModeCheckBox.checked
+
+        self.ui.inputSegmentationSelector.enabled = not batchMode
+        self.ui.referenceVolumeSelector.enabled = not batchMode
+        self.ui.outputSegmentationSelector.enabled = not batchMode
+        self.ui.overwriteInputCheckBox.enabled = not batchMode
+
+        if batchMode:
+            self.ui.overwriteInputCheckBox.checked = False
+
+        self.updateOutputVisibility()
+        self._checkCanApply()
+
+
+    def onBrowseBatchInputFolder(self, checked=False) -> None:
+        folderPath = qt.QFileDialog.getExistingDirectory(
+            slicer.util.mainWindow(),
+            "Select batch input folder",
+            self.batchInputFolderLineEdit.text,
+        )
+
+        if folderPath:
+            self.batchInputFolderLineEdit.text = folderPath
+            self._checkCanApply()
+
+
+    def onBrowseBatchOutputFolder(self, checked=False) -> None:
+        folderPath = qt.QFileDialog.getExistingDirectory(
+            slicer.util.mainWindow(),
+            "Select batch output folder",
+            self.batchOutputFolderLineEdit.text,
+        )
+
+        if folderPath:
+            self.batchOutputFolderLineEdit.text = folderPath
+            self._checkCanApply()
+
+
+    def isBatchModeEnabled(self) -> bool:
+        return hasattr(self, "batchModeCheckBox") and self.batchModeCheckBox.checked
+        
     def cleanup(self) -> None:
         self.removeObservers()
 
@@ -258,12 +419,19 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             tabWidget.setCurrentIndex(firstEnabledIndex)
 
     def updateOutputVisibility(self, *args) -> None:
-        """Hide output selector only when overwrite is enabled and only one method is selected."""
+        """
+        Hide output selector only when overwrite is enabled and only one method is selected.
 
-        overwrite = self.ui.overwriteInputCheckBox.checked
-        numberOfMethods = len(self.getSelectedSmoothingSteps())
+        In batch mode, the output segmentation selector is not used because outputs
+        are saved directly to the selected output folder.
+        """
 
-        showOutputSelector = not overwrite or numberOfMethods > 1
+        if self.isBatchModeEnabled():
+            showOutputSelector = False
+        else:
+            overwrite = self.ui.overwriteInputCheckBox.checked
+            numberOfMethods = len(self.getSelectedSmoothingSteps())
+            showOutputSelector = not overwrite or numberOfMethods > 1
 
         if hasattr(self.ui, "outputSegmentationLabel"):
             self.ui.outputSegmentationLabel.visible = showOutputSelector
@@ -348,13 +516,43 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             or self.ui.jointTaubinCheckBox.checked
         )
     def _checkCanApply(self, caller=None, event=None) -> None:
+        smoothingSteps = self.getSelectedSmoothingSteps()
+        hasMethod = len(smoothingSteps) > 0
+
+        if self.isBatchModeEnabled():
+            inputFolder = self.batchInputFolderLineEdit.text.strip()
+            outputFolder = self.batchOutputFolderLineEdit.text.strip()
+
+            canApply = (
+                hasMethod
+                and os.path.isdir(inputFolder)
+                and len(outputFolder) > 0
+            )
+
+            self.ui.applyButton.enabled = canApply
+
+            if canApply:
+                self.ui.applyButton.toolTip = _(
+                    "Batch process all matched volume/segmentation pairs in the selected folder."
+                )
+                if hasattr(self.ui, "statusLabel"):
+                    self.ui.statusLabel.text = "Ready to batch process segmentations."
+            else:
+                self.ui.applyButton.toolTip = _(
+                    "Select a valid input folder, output folder, and at least one smoothing method."
+                )
+                if hasattr(self.ui, "statusLabel"):
+                    self.ui.statusLabel.text = (
+                        "Select batch input folder, output folder, and smoothing methods."
+                    )
+
+            return
+
         inputSegmentation = self.ui.inputSegmentationSelector.currentNode()
         referenceVolume = self.ui.referenceVolumeSelector.currentNode()
         overwriteInput = self.ui.overwriteInputCheckBox.checked
         outputSegmentation = self.ui.outputSegmentationSelector.currentNode()
-        smoothingSteps = self.getSelectedSmoothingSteps()
 
-        hasMethod = len(smoothingSteps) > 0
         multipleMethods = len(smoothingSteps) > 1
 
         canApply = (
@@ -394,20 +592,24 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                     self.ui.statusLabel.text = (
                         "Select the required inputs and smoothing methods."
                     )
+                    
     def onApplyButton(self) -> None:
-        """Run smoothing when the user clicks Apply.
+        """
+        Run smoothing when the user clicks Apply.
 
-        Important:
-        Each selected smoothing method is applied independently to the original
-        input segmentation. Methods are not applied sequentially on top of each other.
+        In normal mode:
+            Apply selected smoothing methods to the selected input segmentation.
+
+        In batch mode:
+            Load all matched Volume_XXX / Segmentation_XXX pairs from a folder,
+            apply selected smoothing methods independently, and save the outputs.
         """
 
         with slicer.util.tryWithErrorDisplay(
             _("Failed to apply smoothing."), waitCursor=True
         ):
 
-            inputSegmentation = self.ui.inputSegmentationSelector.currentNode()
-            referenceVolume = self.ui.referenceVolumeSelector.currentNode()
+            self.resetProgressBars()
 
             scope = self.currentComboData(self.ui.scopeComboBox)
             smoothingSteps = self.getSelectedSmoothingSteps()
@@ -415,23 +617,72 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             if not smoothingSteps:
                 raise ValueError("At least one smoothing method must be selected.")
 
+            # ------------------------------------------------------------
+            # Batch mode
+            # ------------------------------------------------------------
+            if self.isBatchModeEnabled():
+                inputFolder = self.batchInputFolderLineEdit.text.strip()
+                outputFolder = self.batchOutputFolderLineEdit.text.strip()
+                recursive = self.batchRecursiveCheckBox.checked
+                keepLoadedNodes = self.batchKeepLoadedNodesCheckBox.checked
+
+                if not os.path.isdir(inputFolder):
+                    raise ValueError(f"Batch input folder does not exist: {inputFolder}")
+
+                if not outputFolder:
+                    raise ValueError("Batch output folder is empty.")
+
+                self.updateBatchProgress(0, "Batch smoothing started...")
+
+                summary = self.logic.batchSmoothSegmentations(
+                    inputFolder=inputFolder,
+                    outputFolder=outputFolder,
+                    steps=smoothingSteps,
+                    scope=scope,
+                    recursive=recursive,
+                    keepLoadedNodes=keepLoadedNodes,
+                    progressCallback=self.updateBatchProgress,
+                )
+
+                self.updateBatchProgress(
+                    100,
+                    (
+                        f"Batch completed. Processed {summary['processed_pairs']} pair(s), "
+                        f"saved {summary['saved_outputs']} output file(s), "
+                        f"failed {len(summary['failed_pairs'])} pair(s)."
+                    )
+                )
+
+                slicer.util.infoDisplay(
+                    f"Batch smoothing completed.\n\n"
+                    f"Found pairs: {summary['found_pairs']}\n"
+                    f"Processed pairs: {summary['processed_pairs']}\n"
+                    f"Saved outputs: {summary['saved_outputs']}\n"
+                    f"Failed pairs: {len(summary['failed_pairs'])}\n"
+                    f"Output folder:\n{outputFolder}"
+                )
+
+                return
+
+            # ------------------------------------------------------------
+            # Single segmentation mode
+            # ------------------------------------------------------------
+            inputSegmentation = self.ui.inputSegmentationSelector.currentNode()
+            referenceVolume = self.ui.referenceVolumeSelector.currentNode()
             overwriteInput = self.ui.overwriteInputCheckBox.checked
 
-            # Overwrite only makes sense when there is a single selected method.
-            # If several methods are selected, each method needs a different output node.
             if overwriteInput and len(smoothingSteps) > 1:
                 raise ValueError(
                     "Overwrite input can only be used when one smoothing method is selected. "
                     "Disable overwrite to generate one independent output segmentation per method."
                 )
 
-            if hasattr(self.ui, "statusLabel"):
-                self.ui.statusLabel.text = "Applying smoothing methods independently..."
-            slicer.app.processEvents()
 
             if overwriteInput:
-                # Single selected method only.
                 step = smoothingSteps[0]
+                methodName = step.get("name", step["method"])
+
+
                 self.logic.smoothSegmentation(
                     segmentationNode=inputSegmentation,
                     referenceVolumeNode=referenceVolume,
@@ -449,8 +700,6 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 outputNodes = [inputSegmentation]
 
             else:
-                # Independent mode:
-                # each method is applied to a fresh clone of the ORIGINAL segmentation.
                 outputNodes = self.logic.smoothSegmentationIndependently(
                     inputSegmentationNode=inputSegmentation,
                     referenceVolumeNode=referenceVolume,
@@ -459,15 +708,9 @@ class SmoothingWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                     baseOutputSegmentationNode=self.ui.outputSegmentationSelector.currentNode(),
                 )
 
-            if hasattr(self.ui, "statusLabel"):
-                self.ui.statusLabel.text = (
-                    f"Smoothing completed. Created {len(outputNodes)} output segmentation(s)."
-                )
-
             slicer.util.infoDisplay(
                 f"Smoothing completed. Created {len(outputNodes)} output segmentation(s)."
             )
-
 
 #
 # SmoothingLogic
@@ -720,6 +963,8 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
 
         outputNodes = []
 
+        totalSteps = len(steps)
+
         for stepIndex, step in enumerate(steps, start=1):
             methodName = step.get("name", step.get("method", f"Step{stepIndex}"))
             safeMethodName = self.safeNodeName(methodName)
@@ -770,6 +1015,7 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
         )
 
         return outputNodes
+
     def smoothSegmentationPipeline(
         self,
         segmentationNode,
@@ -871,6 +1117,418 @@ class SmoothingLogic(ScriptedLoadableModuleLogic):
             displayNode.SetSegmentVisibility(
                 segmentId, segmentId in visibleSegmentIds
             )
+    
+    def isVolumeFile(self, filePath):
+        fileName = os.path.basename(filePath).lower()
+
+        volumeExtensions = [
+            ".nii",
+            ".nii.gz",
+            ".nrrd",
+            ".nhdr",
+            ".mha",
+            ".mhd",
+        ]
+
+        if self.isSegmentationFile(filePath):
+            return False
+
+        return any(fileName.endswith(ext) for ext in volumeExtensions)
+
+
+    def isSegmentationFile(self, filePath):
+        fileName = os.path.basename(filePath).lower()
+
+        segmentationExtensions = [
+            ".seg.nrrd",
+            ".seg.nhdr",
+            ".seg.vtm",
+            ".seg.vtk",
+            ".nrrd",
+            ".nii",
+            ".nii.gz",
+            ".mha",
+            ".mhd",
+        ]
+
+        if ".seg." in fileName:
+            return True
+
+        segmentationKeywords = [
+            "seg",
+            "segmentation",
+            "label",
+            "labels",
+            "mask",
+        ]
+
+        hasSegmentationKeyword = any(
+            keyword in fileName for keyword in segmentationKeywords
+        )
+
+        hasSupportedExtension = any(
+            fileName.endswith(ext) for ext in segmentationExtensions
+        )
+
+        return hasSegmentationKeyword and hasSupportedExtension
+
+
+    def sampleIdFromFileName(self, filePath):
+        """
+        Extract sample ID from names like:
+
+            Volume_001.nrrd
+            Volume_001.nii.gz
+            Segmentation_001.seg.nrrd
+            Segmentation_001.nrrd
+
+        Returns:
+            "001"
+
+        If the file name does not match this pattern, returns None.
+        """
+
+        fileName = os.path.basename(filePath)
+
+        match = re.search(
+            r"^(Volume|Segmentation)_(.+?)(\.seg)?"
+            r"(\.nii\.gz|\.nii|\.nrrd|\.nhdr|\.mha|\.mhd|\.vtk|\.vtm)$",
+            fileName,
+            flags=re.IGNORECASE,
+        )
+
+        if not match:
+            return None
+
+        return match.group(2)
+
+
+    def collectFilesFromFolder(self, folderPath, recursive=True):
+        """Collect all files from a folder."""
+
+        allFiles = []
+
+        if recursive:
+            for root, dirs, files in os.walk(folderPath):
+                for fileName in files:
+                    allFiles.append(os.path.join(root, fileName))
+        else:
+            for fileName in os.listdir(folderPath):
+                filePath = os.path.join(folderPath, fileName)
+                if os.path.isfile(filePath):
+                    allFiles.append(filePath)
+
+        return allFiles
+
+
+    def findVolumeSegmentationPairs(self, folderPath, recursive=True):
+        """
+        Find matching volume/segmentation pairs in a folder.
+
+        Matching rule:
+            Volume_XXX.ext
+            Segmentation_XXX.ext
+
+        Example:
+            Volume_012.nrrd
+            Segmentation_012.seg.nrrd
+        """
+
+        if not os.path.isdir(folderPath):
+            raise ValueError(f"Folder does not exist: {folderPath}")
+
+        allFiles = self.collectFilesFromFolder(folderPath, recursive=recursive)
+
+        volumeFiles = [
+            filePath for filePath in allFiles
+            if self.isVolumeFile(filePath)
+        ]
+
+        segmentationFiles = [
+            filePath for filePath in allFiles
+            if self.isSegmentationFile(filePath)
+        ]
+
+        segmentationBySampleId = {}
+
+        for segmentationFile in segmentationFiles:
+            sampleId = self.sampleIdFromFileName(segmentationFile)
+            if sampleId is not None:
+                segmentationBySampleId.setdefault(sampleId, []).append(segmentationFile)
+
+        pairs = []
+
+        for volumeFile in volumeFiles:
+            sampleId = self.sampleIdFromFileName(volumeFile)
+
+            if sampleId is None:
+                continue
+
+            if sampleId in segmentationBySampleId:
+                for segmentationFile in segmentationBySampleId[sampleId]:
+                    pairs.append(
+                        {
+                            "sampleId": sampleId,
+                            "volumePath": volumeFile,
+                            "segmentationPath": segmentationFile,
+                        }
+                    )
+
+        return pairs
+
+
+    def batchSmoothSegmentations(
+        self,
+        inputFolder,
+        outputFolder,
+        steps,
+        scope="ALL_SEGMENTS",
+        recursive=True,
+        keepLoadedNodes=False,
+        progressCallback=None,
+    ):
+        """
+        Batch process segmentation files from a folder.
+
+        For each matched pair:
+            Volume_XXX.ext
+            Segmentation_XXX.ext
+
+        The function:
+            1. Loads the volume.
+            2. Loads the segmentation.
+            3. Applies each selected smoothing method independently.
+            4. Saves each output segmentation as .seg.nrrd.
+            5. Removes temporary nodes unless keepLoadedNodes=True.
+        """
+
+        if not os.path.isdir(inputFolder):
+            raise ValueError(f"Input folder does not exist: {inputFolder}")
+
+        if not steps:
+            raise ValueError("No smoothing steps were selected.")
+
+        os.makedirs(outputFolder, exist_ok=True)
+
+        inputFolderAbs = os.path.abspath(inputFolder)
+        outputFolderAbs = os.path.abspath(outputFolder)
+
+        if outputFolderAbs == inputFolderAbs:
+            raise ValueError(
+                "The batch output folder cannot be the same as the input folder. "
+                "Select a separate output folder."
+            )
+
+        if recursive and outputFolderAbs.startswith(inputFolderAbs + os.sep):
+            raise ValueError(
+                "The batch output folder cannot be inside the input folder when recursive search is enabled. "
+                "Select a separate output folder or disable recursive search."
+            )
+
+        pairs = self.findVolumeSegmentationPairs(
+            folderPath=inputFolder,
+            recursive=recursive,
+        )
+
+        if not pairs:
+            raise ValueError(
+                "No matching volume/segmentation pairs were found. "
+                "Expected names such as Volume_001.nrrd and Segmentation_001.seg.nrrd."
+            )
+
+        processedPairs = 0
+        savedOutputs = 0
+        failedPairs = []
+
+        totalPairs = len(pairs)
+        totalOperations = totalPairs * len(steps)
+        completedOperations = 0
+
+        if progressCallback:
+            progressCallback(
+                0,
+                f"Batch smoothing started. Found {totalPairs} pair(s)."
+            )
+
+        logging.info(f"Batch smoothing started. Found {totalPairs} pair(s).")
+
+        for pairIndex, pair in enumerate(pairs, start=1):
+            sampleId = pair["sampleId"]
+            volumePath = pair["volumePath"]
+            segmentationPath = pair["segmentationPath"]
+
+            logging.info(
+                f"Processing pair {pairIndex}/{totalPairs}: "
+                f"sample={sampleId}, "
+                f"volume={os.path.basename(volumePath)}, "
+                f"segmentation={os.path.basename(segmentationPath)}"
+            )
+
+            if progressCallback:
+                progressValue = int((completedOperations / totalOperations) * 100)
+                progressCallback(
+                    progressValue,
+                    f"Loading sample {sampleId} ({pairIndex}/{totalPairs})..."
+                )
+
+            loadedNodes = []
+            outputNodes = []
+
+            try:
+                referenceVolumeNode = slicer.util.loadVolume(volumePath)
+                if referenceVolumeNode is None:
+                    raise RuntimeError(f"Failed to load volume: {volumePath}")
+
+                loadedNodes.append(referenceVolumeNode)
+
+                segmentationNode = slicer.util.loadSegmentation(segmentationPath)
+                if segmentationNode is None:
+                    raise RuntimeError(f"Failed to load segmentation: {segmentationPath}")
+
+                segmentationNode.CreateDefaultDisplayNodes()
+                loadedNodes.append(segmentationNode)
+
+                if segmentationNode.GetSegmentation().GetNumberOfSegments() == 0:
+                    raise RuntimeError(
+                        f"Segmentation has no segments: {segmentationPath}"
+                    )
+
+                for stepIndex, step in enumerate(steps, start=1):
+                    methodName = step.get("name", step.get("method", f"Step{stepIndex}"))
+                    safeMethodName = self.safeNodeName(methodName)
+
+                    if progressCallback:
+                        progressValue = int((completedOperations / totalOperations) * 100)
+                        progressCallback(
+                            progressValue,
+                            (
+                                f"Sample {sampleId}: applying {methodName} "
+                                f"({stepIndex}/{len(steps)}), "
+                                f"case {pairIndex}/{totalPairs}..."
+                            )
+                        )
+
+                    outputName = (
+                        f"Segmentation_{sampleId}_{safeMethodName}_smoothed"
+                    )
+
+                    outputNode = slicer.mrmlScene.AddNewNodeByClass(
+                        "vtkMRMLSegmentationNode",
+                        outputName,
+                    )
+
+                    self.copySegmentationContent(
+                        inputSegmentationNode=segmentationNode,
+                        outputSegmentationNode=outputNode,
+                        outputName=outputName,
+                    )
+
+                    self.smoothSegmentation(
+                        segmentationNode=outputNode,
+                        referenceVolumeNode=referenceVolumeNode,
+                        method=step["method"],
+                        scope=scope,
+                        kernelSizeMm=step.get("kernelSizeMm", 3.0),
+                        gaussianStandardDeviationMm=step.get(
+                            "gaussianStandardDeviationMm", 1.0
+                        ),
+                        jointTaubinSmoothingFactor=step.get(
+                            "jointTaubinSmoothingFactor", 0.5
+                        ),
+                    )
+
+                    outputNodes.append(outputNode)
+
+                    outputFileName = (
+                        f"Segmentation_{sampleId}_{safeMethodName}_smoothed.seg.nrrd"
+                    )
+
+                    outputPath = os.path.join(outputFolder, outputFileName)
+
+                    success = slicer.util.saveNode(outputNode, outputPath)
+
+                    if not success:
+                        raise RuntimeError(f"Failed to save output: {outputPath}")
+
+                    logging.info(f"Saved: {outputPath}")
+                    savedOutputs += 1
+
+                    completedOperations += 1
+
+                    if progressCallback:
+                        progressValue = int((completedOperations / totalOperations) * 100)
+                        progressCallback(
+                            progressValue,
+                            (
+                                f"Saved {methodName} result for sample {sampleId}. "
+                                f"Progress: {completedOperations}/{totalOperations}."
+                            )
+                        )
+
+                processedPairs += 1
+
+            except Exception as exc:
+                logging.error(
+                    f"Failed to process sample {sampleId}: {str(exc)}"
+                )
+
+                failedPairs.append(
+                    {
+                        "sampleId": sampleId,
+                        "volumePath": volumePath,
+                        "segmentationPath": segmentationPath,
+                        "error": str(exc),
+                    }
+                )
+
+                # Count failed sample as completed operations to avoid a stuck progress bar.
+                completedOperations += len(steps)
+
+                if completedOperations > totalOperations:
+                    completedOperations = totalOperations
+
+                if progressCallback:
+                    progressValue = int((completedOperations / totalOperations) * 100)
+                    progressCallback(
+                        progressValue,
+                        f"Failed sample {sampleId}: {str(exc)}"
+                    )
+
+            finally:
+                if not keepLoadedNodes:
+                    for node in outputNodes:
+                        if node is not None and slicer.mrmlScene.IsNodePresent(node):
+                            slicer.mrmlScene.RemoveNode(node)
+
+                    for node in loadedNodes:
+                        if node is not None and slicer.mrmlScene.IsNodePresent(node):
+                            slicer.mrmlScene.RemoveNode(node)
+
+                slicer.app.processEvents()
+
+        logging.info(
+            f"Batch smoothing completed. "
+            f"Processed {processedPairs}/{totalPairs} pair(s). "
+            f"Saved {savedOutputs} output file(s). "
+            f"Failed {len(failedPairs)} pair(s)."
+        )
+
+        if progressCallback:
+            progressCallback(
+                100,
+                (
+                    f"Batch completed. Processed {processedPairs}/{totalPairs} pair(s), "
+                    f"saved {savedOutputs} output file(s), "
+                    f"failed {len(failedPairs)} pair(s)."
+                )
+            )
+
+        return {
+            "found_pairs": totalPairs,
+            "processed_pairs": processedPairs,
+            "saved_outputs": savedOutputs,
+            "failed_pairs": failedPairs,
+        }
 
 
 #
